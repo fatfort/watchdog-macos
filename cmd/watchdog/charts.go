@@ -114,6 +114,8 @@ func generateChartsHTML(store *storage.Store) (string, error) {
 				fill: true,
 				borderWidth: 1.5,
 				pointRadius: 0,
+				pointHoverRadius: 5,
+				pointHitRadius: 15,
 				tension: 0.3
 			}`, escapeJS(name), strings.Join(vals, ","), color, color))
 		}
@@ -220,6 +222,7 @@ const dashboardTemplate = `<!DOCTYPE html>
     <meta charset="utf-8">
     <meta name="color-scheme" content="dark">
     <title>Watchdog - System Health Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,5 95,50 50,95 5,50' fill='none' stroke='%23ff6384' stroke-width='6'/><polygon points='50,22 78,50 50,78 22,50' fill='%23ff638444' stroke='%23ff9f40' stroke-width='3'/><circle cx='50' cy='50' r='8' fill='%23ff6384'/></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -279,10 +282,6 @@ const dashboardTemplate = `<!DOCTYPE html>
         .controls .refresh-btn:hover {
             background: #ff638422;
         }
-        .controls .refresh-btn.loading {
-            opacity: 0.5;
-            pointer-events: none;
-        }
         .summary-cards {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -333,7 +332,11 @@ const dashboardTemplate = `<!DOCTYPE html>
             text-transform: uppercase;
             font-size: 0.8em;
             letter-spacing: 0.05em;
+            cursor: pointer;
+            user-select: none;
         }
+        .process-table th:hover { color: #c9d1d9; }
+        .process-table th .sort-arrow { font-size: 0.7em; margin-left: 4px; }
         .process-table td {
             padding: 6px 12px;
             border-bottom: 1px solid #21262d;
@@ -401,7 +404,13 @@ const dashboardTemplate = `<!DOCTYPE html>
             <h2>Process Summary</h2>
             <table class="process-table">
                 <thead>
-                    <tr><th>Process</th><th>Current</th><th>Peak</th><th>Avg RSS</th><th>Avg CPU</th></tr>
+                    <tr>
+                        <th onclick="sortTable(0)">Process<span class="sort-arrow"></span></th>
+                        <th onclick="sortTable(1)">Current<span class="sort-arrow"></span></th>
+                        <th onclick="sortTable(2)">Peak<span class="sort-arrow"></span></th>
+                        <th onclick="sortTable(3)">Avg RSS<span class="sort-arrow"></span></th>
+                        <th onclick="sortTable(4)">Avg CPU<span class="sort-arrow"></span></th>
+                    </tr>
                 </thead>
                 <tbody id="procTableBody"></tbody>
             </table>
@@ -451,6 +460,45 @@ const tickColor = '#484f58';
 const defaultScaleX = { ticks: { color: tickColor, maxTicksLimit: 10, maxRotation: 0 }, grid: { display: false } };
 const defaultScaleY = { grid: { color: gridColor }, ticks: { color: tickColor } };
 
+// Shared tooltip config: show only the single dataset closest to cursor
+const tooltipStyle = {
+    backgroundColor: '#161b22ee',
+    borderColor: '#30363d',
+    borderWidth: 1,
+    titleColor: '#c9d1d9',
+    bodyColor: '#8b949e',
+    padding: 10,
+    cornerRadius: 6
+};
+const hoverConfig = {
+    interaction: { mode: 'point', intersect: false },
+    hover: { mode: 'point', intersect: false },
+    plugins: {
+        tooltip: {
+            ...tooltipStyle,
+            mode: 'point',
+            intersect: false,
+            // Only show the single closest dataset
+            filter: function(tooltipItem, _index, tooltipItems) {
+                if (tooltipItems.length <= 1) return true;
+                // Find the one with smallest distance to cursor
+                let minDist = Infinity, minIdx = 0;
+                tooltipItems.forEach((item, i) => {
+                    const meta = item.chart.getDatasetMeta(item.datasetIndex);
+                    const pt = meta.data[item.dataIndex];
+                    if (pt) {
+                        const dx = pt.x - item.chart._lastEvent.x;
+                        const dy = pt.y - item.chart._lastEvent.y;
+                        const dist = dx*dx + dy*dy;
+                        if (dist < minDist) { minDist = dist; minIdx = i; }
+                    }
+                });
+                return tooltipItem === tooltipItems[minIdx];
+            }
+        }
+    }
+};
+
 function updateCharts() {
     const d = DATA[currentWindow];
     if (!d) return;
@@ -466,16 +514,19 @@ function updateCharts() {
                 backgroundColor: '#ff638422',
                 fill: true,
                 tension: 0.3,
-                pointRadius: 0
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                pointHitRadius: 15
             }]
         },
         options: {
             responsive: true,
+            ...hoverConfig,
             scales: {
                 y: { ...defaultScaleY, min: 0, max: 100 },
                 x: defaultScaleX
             },
-            plugins: { legend: { display: false } }
+            plugins: { ...hoverConfig.plugins, legend: { display: false } }
         },
         plugins: [{ afterDraw: chart => drawThreshold(chart, 70, '#ff638488') }]
     });
@@ -491,13 +542,16 @@ function updateCharts() {
                 backgroundColor: '#ffce5622',
                 fill: true,
                 tension: 0.3,
-                pointRadius: 0
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                pointHitRadius: 15
             }]
         },
         options: {
             responsive: true,
+            ...hoverConfig,
             scales: { y: { ...defaultScaleY, min: 0 }, x: defaultScaleX },
-            plugins: { legend: { display: false } }
+            plugins: { ...hoverConfig.plugins, legend: { display: false } }
         },
         plugins: [{ afterDraw: chart => drawThreshold(chart, 8, '#ffce5688') }]
     });
@@ -507,15 +561,16 @@ function updateCharts() {
         data: {
             labels: d.labels,
             datasets: [
-                { label: '1min', data: d.load1, borderColor: '#36a2eb', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
-                { label: '5min', data: d.load5, borderColor: '#4bc0c0', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
-                { label: '15min', data: d.load15, borderColor: '#9966ff', borderWidth: 1.5, pointRadius: 0, tension: 0.3 }
+                { label: '1min', data: d.load1, borderColor: '#36a2eb', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 15, tension: 0.3 },
+                { label: '5min', data: d.load5, borderColor: '#4bc0c0', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 15, tension: 0.3 },
+                { label: '15min', data: d.load15, borderColor: '#9966ff', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 15, tension: 0.3 }
             ]
         },
         options: {
             responsive: true,
+            ...hoverConfig,
             scales: { y: { ...defaultScaleY, min: 0 }, x: defaultScaleX },
-            plugins: { legend: { labels: { color: '#8b949e', boxWidth: 10, padding: 15 } } }
+            plugins: { ...hoverConfig.plugins, legend: { labels: { color: '#8b949e', boxWidth: 10, padding: 15 } } }
         },
         plugins: [{
             afterDraw: function(chart) {
@@ -539,6 +594,7 @@ function updateCharts() {
         },
         options: {
             responsive: true,
+            ...hoverConfig,
             scales: {
                 y: {
                     stacked: true,
@@ -549,8 +605,8 @@ function updateCharts() {
                 x: defaultScaleX
             },
             plugins: {
-                legend: { labels: { color: '#8b949e', boxWidth: 10, padding: 12 } },
-                tooltip: { mode: 'index' }
+                ...hoverConfig.plugins,
+                legend: { labels: { color: '#8b949e', boxWidth: 10, padding: 12 } }
             }
         }
     });
@@ -558,26 +614,33 @@ function updateCharts() {
     document.getElementById('procTableBody').innerHTML = d.procTable;
 }
 
-async function refreshDashboard() {
-    const btn = document.getElementById('refreshBtn');
-    btn.classList.add('loading');
-    btn.textContent = '↻ Refreshing...';
+let sortCol = -1, sortAsc = true;
+function sortTable(col) {
+    const tbody = document.getElementById('procTableBody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = col === 0; }
 
-    try {
-        // Use the watchdog serve endpoint if available, otherwise fall back to collect+reload
-        const resp = await fetch('http://localhost:9847/refresh', { method: 'POST', signal: AbortSignal.timeout(10000) });
-        if (resp.ok) {
-            window.location.reload();
-            return;
+    rows.sort((a, b) => {
+        let av = a.cells[col].textContent.trim();
+        let bv = b.cells[col].textContent.trim();
+        if (col > 0) {
+            av = parseFloat(av.replace(/[^0-9.\-]/g, '')) || 0;
+            bv = parseFloat(bv.replace(/[^0-9.\-]/g, '')) || 0;
         }
-    } catch(e) {
-        // Server not running — show instructions
-        btn.textContent = '↻ Run: watchdog serve';
-        setTimeout(() => {
-            btn.textContent = '↻ Refresh';
-            btn.classList.remove('loading');
-        }, 3000);
-    }
+        let cmp = col === 0 ? av.localeCompare(bv) : av - bv;
+        return sortAsc ? cmp : -cmp;
+    });
+
+    rows.forEach(r => tbody.appendChild(r));
+
+    document.querySelectorAll('.process-table th .sort-arrow').forEach((el, i) => {
+        el.textContent = i === col ? (sortAsc ? ' ▲' : ' ▼') : '';
+    });
+}
+
+function refreshDashboard() {
+    // Navigate to /refresh which collects fresh data and redirects back to /
+    window.location.href = '/refresh';
 }
 
 updateCharts();

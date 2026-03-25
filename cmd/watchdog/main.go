@@ -175,40 +175,50 @@ func showSummary() error {
 }
 
 func runServe() error {
-	fmt.Println("Watchdog refresh server on http://localhost:9847")
-	fmt.Println("Press Ctrl+C to stop")
-
-	http.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
+	// Generate initial dashboard
+	regenerate := func() error {
+		store, err := storage.New()
+		if err != nil {
+			return err
 		}
+		defer store.Close()
+		_, err = generateChartsHTML(store)
+		return err
+	}
 
-		// Collect fresh sample
+	if err := regenerate(); err != nil {
+		return fmt.Errorf("initial generate: %w", err)
+	}
+
+	logDir, err := storage.GetLogDir()
+	if err != nil {
+		return err
+	}
+	htmlPath := filepath.Join(logDir, "dashboard.html")
+
+	// Serve the dashboard HTML at root
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, htmlPath)
+	})
+
+	// Refresh endpoint: collect + regenerate, then redirect to /
+	http.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if err := runCollect(); err != nil {
 			fmt.Fprintf(os.Stderr, "collect error: %v\n", err)
 		}
-
-		// Regenerate HTML
-		store, err := storage.New()
-		if err != nil {
+		if err := regenerate(); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		defer store.Close()
-
-		if _, err := generateChartsHTML(store); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "ok")
 		fmt.Printf("[%s] Dashboard refreshed\n", time.Now().Format("15:04:05"))
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
+
+	fmt.Println("Watchdog dashboard: http://localhost:9847")
+	fmt.Println("Press Ctrl+C to stop")
+
+	// Open in browser
+	_ = exec.Command("open", "http://localhost:9847").Start()
 
 	return http.ListenAndServe(":9847", nil)
 }
