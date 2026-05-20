@@ -161,6 +161,53 @@ func (s *Store) GetProcessTable(hours int) ([]ProcessTableRow, error) {
 	return table, rows.Err()
 }
 
+// ZoneTableRow represents a kernel zone in the summary table.
+type ZoneTableRow struct {
+	Name        string
+	CurrentBytes int64
+	PeakBytes    int64
+	AvgBytes     float64
+	ElemSize     int64
+}
+
+// GetZoneTable returns top kernel zones over the period, ranked by average estimated size.
+func (s *Store) GetZoneTable(hours int, limit int) ([]ZoneTableRow, error) {
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
+
+	var latestID int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM system_samples WHERE timestamp >= ?`, cutoff).Scan(&latestID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(
+		`SELECT zs.name,
+		        COALESCE((SELECT zs2.est_bytes FROM zone_samples zs2 WHERE zs2.name = zs.name AND zs2.sample_id = ? LIMIT 1), 0) as current_bytes,
+		        MAX(zs.est_bytes) as peak_bytes,
+		        AVG(zs.est_bytes) as avg_bytes,
+		        MAX(zs.elem_size) as elem_size
+		 FROM zone_samples zs
+		 JOIN system_samples ss ON zs.sample_id = ss.id
+		 WHERE ss.timestamp >= ?
+		 GROUP BY zs.name
+		 ORDER BY avg_bytes DESC
+		 LIMIT ?`, latestID, cutoff, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var table []ZoneTableRow
+	for rows.Next() {
+		var r ZoneTableRow
+		if err := rows.Scan(&r.Name, &r.CurrentBytes, &r.PeakBytes, &r.AvgBytes, &r.ElemSize); err != nil {
+			return nil, err
+		}
+		table = append(table, r)
+	}
+	return table, rows.Err()
+}
+
 // SummaryStats holds aggregate stats for the CLI summary.
 type SummaryStats struct {
 	SampleCount int

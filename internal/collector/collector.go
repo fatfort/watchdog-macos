@@ -14,12 +14,14 @@ import (
 
 const (
 	TopProcessCount = 15
+	TopZoneCount    = 20
 )
 
 // CollectResult holds a complete sample of system health data.
 type CollectResult struct {
 	System    storage.SystemSample
 	Processes []storage.ProcessSample
+	Zones     []storage.ZoneSample
 	LogLine   string // flat text log line for backward compat
 }
 
@@ -46,6 +48,14 @@ func Collect() (*CollectResult, error) {
 		return nil, fmt.Errorf("processes: %w", err)
 	}
 	result.Processes = procs
+
+	// Zones are best-effort — if zprint changes format or vanishes, keep collecting
+	// the rest. The whole point of this source is to catch the kind of runaway
+	// kernel-zone growth that caused the 9 GB data_shakalloc.1024 panic.
+	zones, err := collectKernelZones()
+	if err == nil {
+		result.Zones = zones
+	}
 
 	result.LogLine = formatLogLine(result)
 	return result, nil
@@ -212,6 +222,94 @@ func collectProcesses() ([]storage.ProcessSample, error) {
 		})
 	}
 	return samples, nil
+}
+
+// collectKernelZones samples kernel zone occupancy via `zprint`. Tries sudo
+// first (which fills in cur_size columns with real values like "9G"); falls
+// back to bare zprint, which only reports element counts — those × elem_size
+// is a faithful estimate of resident bytes and would have caught the runaway
+// data_shakalloc.1024 zone that triggered the watchdog-timeout panic.
+//
+// To upgrade unprivileged → privileged, add a sudoers entry:
+//
+//	echo 'YOURNAME ALL=(root) NOPASSWD: /usr/bin/zprint' | sudo tee /etc/sudoers.d/watchdog
+//	sudo chmod 440 /etc/sudoers.d/watchdog
+func collectKernelZones() ([]storage.ZoneSample, error) {
+	// -L suppresses the trailing wired-memory block so we don't have to skip past it.
+	out, err := run("/usr/bin/sudo", "-n", "/usr/bin/zprint", "-L")
+	if err != nil {
+		out, err = run("/usr/bin/zprint", "-L")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var zones []storage.ZoneSample
+	inData := false
+	for _, line := range strings.Split(out, "\n") {
+		if !inData {
+			// The header ends with a dashed rule; everything after that is zone data.
+			if strings.HasPrefix(strings.TrimSpace(line), "----") {
+				inData = true
+			}
+			continue
+		}
+		fields := strings.Fields(line)
+		// Expected columns: name elem cur_size max_size cur_elts max_elts inuse alloc_size alloc_count [flags...]
+		if len(fields) < 9 {
+			continue
+		}
+		elemSize, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		inUse, err := strconv.ParseInt(fields[6], 10, 64)
+		if err != nil {
+			continue
+		}
+		// Prefer the kernel's reported cur_size when available (root-only); fall back to elem*inuse.
+		estBytes := parseZprintSize(fields[2])
+		if estBytes == 0 {
+			estBytes = elemSize * inUse
+		}
+		zones = append(zones, storage.ZoneSample{
+			Name:     fields[0],
+			ElemSize: elemSize,
+			InUse:    inUse,
+			EstBytes: estBytes,
+		})
+	}
+
+	sort.Slice(zones, func(i, j int) bool {
+		return zones[i].EstBytes > zones[j].EstBytes
+	})
+	if len(zones) > TopZoneCount {
+		zones = zones[:TopZoneCount]
+	}
+	return zones, nil
+}
+
+// parseZprintSize parses zprint's human-readable sizes ("0K", "61K", "365M", "9G")
+// into bytes. Returns 0 for the "----" sentinel zprint uses for unbounded zones.
+func parseZprintSize(s string) int64 {
+	if s == "" || s == "----" {
+		return 0
+	}
+	n := len(s)
+	var mult int64
+	switch s[n-1] {
+	case 'K':
+		mult = 1024
+	case 'M':
+		mult = 1024 * 1024
+	case 'G':
+		mult = 1024 * 1024 * 1024
+	default:
+		v, _ := strconv.ParseInt(s, 10, 64)
+		return v
+	}
+	v, _ := strconv.ParseFloat(s[:n-1], 64)
+	return int64(v * float64(mult))
 }
 
 func formatLogLine(r *CollectResult) string {

@@ -106,6 +106,10 @@ func runCollect() error {
 		return fmt.Errorf("failed to insert process samples: %w", err)
 	}
 
+	if err := store.InsertZoneSamples(sampleID, result.Zones); err != nil {
+		return fmt.Errorf("failed to insert zone samples: %w", err)
+	}
+
 	// Write backward-compatible text log
 	logDir, err := storage.GetLogDir()
 	if err == nil {
@@ -180,7 +184,36 @@ func showSummary() error {
 		}
 	}
 
+	zones, err := store.GetZoneTable(summaryHours, 15)
+	if err == nil && len(zones) > 0 {
+		fmt.Printf("\n=== Top Kernel Zones (estimated, elem_size × inuse) ===\n")
+		fmt.Printf("%-30s %10s %10s %10s %8s\n", "Zone", "Current", "Peak", "Avg", "Elem")
+		fmt.Printf("%-30s %10s %10s %10s %8s\n", "----", "-------", "----", "---", "----")
+		for _, z := range zones {
+			fmt.Printf("%-30s %10s %10s %10s %7dB\n",
+				truncate(z.Name, 30),
+				formatBytes(z.CurrentBytes),
+				formatBytes(z.PeakBytes),
+				formatBytes(int64(z.AvgBytes)),
+				z.ElemSize,
+			)
+		}
+	}
+
 	return nil
+}
+
+func formatBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1fGB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0fKB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
 }
 
 func runServe() error {
