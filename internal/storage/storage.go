@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -127,6 +128,12 @@ func initSchema(db *sql.DB) error {
 		est_bytes INTEGER
 	);
 
+	CREATE TABLE IF NOT EXISTS alerts (
+		kind TEXT PRIMARY KEY,
+		last_sent TEXT NOT NULL,
+		last_value REAL
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_system_ts ON system_samples(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_process_sample ON process_samples(sample_id);
 	CREATE INDEX IF NOT EXISTS idx_process_name ON process_samples(name);
@@ -203,6 +210,35 @@ func (s *Store) InsertZoneSamples(sampleID int64, zones []ZoneSample) error {
 	}
 
 	return tx.Commit()
+}
+
+// LastAlertTime returns the timestamp of the last alert of this kind, plus
+// whether one was found. Used by the alerter to enforce per-kind cool-downs
+// so we don't spam the inbox with the same condition every 5 minutes.
+func (s *Store) LastAlertTime(kind string) (time.Time, bool, error) {
+	var ts string
+	err := s.db.QueryRow(`SELECT last_sent FROM alerts WHERE kind = ?`, kind).Scan(&ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
+// RecordAlertSent upserts the last-sent timestamp + triggering value for an alert kind.
+func (s *Store) RecordAlertSent(kind string, value float64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO alerts (kind, last_sent, last_value) VALUES (?, ?, ?)
+		 ON CONFLICT(kind) DO UPDATE SET last_sent=excluded.last_sent, last_value=excluded.last_value`,
+		kind, time.Now().Format(time.RFC3339), value,
+	)
+	return err
 }
 
 func (s *Store) Prune(retentionDays int) error {

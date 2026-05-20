@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/abaj8494/macos-watchdog/internal/alert"
 	"github.com/abaj8494/macos-watchdog/internal/collector"
 	"github.com/abaj8494/macos-watchdog/internal/launchd"
 	"github.com/abaj8494/macos-watchdog/internal/logs"
@@ -118,6 +119,20 @@ func runCollect() error {
 		if err == nil {
 			fmt.Fprintln(f, result.LogLine)
 			f.Close()
+		}
+	}
+
+	// Evaluate threshold alerts. Best-effort — never block the collect on
+	// mail-send failures, but log them so they show up in launchd-stderr.log.
+	if recent, err := store.GetSystemTimeSeries(2); err == nil {
+		for _, a := range alert.Evaluate(store, recent, result.Processes, result.Zones) {
+			if err := alert.Send(a); err != nil {
+				fmt.Fprintf(os.Stderr, "alert send (%s): %v\n", a.Kind, err)
+				continue
+			}
+			if err := store.RecordAlertSent(a.Kind, a.Value); err != nil {
+				fmt.Fprintf(os.Stderr, "alert record (%s): %v\n", a.Kind, err)
+			}
 		}
 	}
 
