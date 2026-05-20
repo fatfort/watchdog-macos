@@ -1,19 +1,28 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/abaj8494/macos-watchdog/internal/collector"
+	"github.com/abaj8494/macos-watchdog/internal/launchd"
+	"github.com/abaj8494/macos-watchdog/internal/logs"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
 	"github.com/spf13/cobra"
 )
 
-const retentionDays = 30
+const (
+	retentionDays = 30
+	// agentLabelPrefix filters which user LaunchAgents the Agents tab surfaces.
+	// Empty string would list every agent; we scope to the user's own.
+	agentLabelPrefix = "com.aayushbajaj."
+)
 
 var summaryHours int
 
@@ -214,6 +223,94 @@ func runServe() error {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 
+	http.HandleFunc("/api/ssh-log", func(w http.ResponseWriter, r *http.Request) {
+		hours := parseHours(r, 24)
+		out, err := logs.GetSSHLog(hours)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, out)
+	})
+
+	http.HandleFunc("/api/crontabs", func(w http.ResponseWriter, r *http.Request) {
+		entries, err := logs.GetCrontabEntries()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(entries)
+	})
+
+	http.HandleFunc("/api/launch-agents", func(w http.ResponseWriter, r *http.Request) {
+		prefix := r.URL.Query().Get("prefix")
+		if prefix == "" {
+			prefix = agentLabelPrefix
+		}
+		if prefix == "*" {
+			prefix = ""
+		}
+		agents, err := launchd.ListAgents(prefix)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(agents)
+	})
+
+	http.HandleFunc("/api/launch-agent-log", func(w http.ResponseWriter, r *http.Request) {
+		label := r.URL.Query().Get("label")
+		if label == "" {
+			http.Error(w, "missing label", 400)
+			return
+		}
+		a, err := launchd.FindAgent(label, agentLabelPrefix)
+		if err != nil {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		out, err := launchd.TailLog(a.LogFile)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, out)
+	})
+
+	http.HandleFunc("/api/cron-log", func(w http.ResponseWriter, r *http.Request) {
+		idx, err := strconv.Atoi(r.URL.Query().Get("idx"))
+		if err != nil {
+			http.Error(w, "bad idx", 400)
+			return
+		}
+		hours := parseHours(r, 24)
+		entries, err := logs.GetCrontabEntries()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if idx < 0 || idx >= len(entries) {
+			http.Error(w, "idx out of range", 400)
+			return
+		}
+		out, err := logs.GetCronLog(entries[idx], hours)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, out)
+	})
+
 	fmt.Println("Watchdog dashboard: http://localhost:9847")
 	fmt.Println("Press Ctrl+C to stop")
 
@@ -221,6 +318,18 @@ func runServe() error {
 	_ = exec.Command("open", "http://localhost:9847").Start()
 
 	return http.ListenAndServe(":9847", nil)
+}
+
+func parseHours(r *http.Request, def int) int {
+	q := r.URL.Query().Get("hours")
+	if q == "" {
+		return def
+	}
+	n, err := strconv.Atoi(q)
+	if err != nil || n <= 0 || n > 24*30 {
+		return def
+	}
+	return n
 }
 
 func truncate(s string, max int) string {

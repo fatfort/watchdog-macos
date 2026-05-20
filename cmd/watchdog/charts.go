@@ -348,12 +348,225 @@ const dashboardTemplate = `<!DOCTYPE html>
             font-size: 0.75em;
             margin-top: 6px;
         }
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #30363d;
+            max-width: 1400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .tabs button {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: #8b949e;
+            padding: 10px 22px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-bottom: -1px;
+        }
+        .tabs button:hover { color: #c9d1d9; }
+        .tabs button.active {
+            color: #ff6384;
+            border-bottom-color: #ff6384;
+        }
+        .tab-panel { display: none; max-width: 1400px; margin: 0 auto; }
+        .tab-panel.active { display: block; }
+        .log-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .log-toolbar label {
+            color: #484f58;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .log-toolbar select, .log-toolbar button {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            padding: 5px 12px;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+        .log-toolbar button:hover { border-color: #58a6ff; }
+        .log-toolbar .spacer { flex: 1; }
+        .log-toolbar .status { color: #484f58; font-size: 0.8em; }
+        .log-view {
+            background: #0b0f14;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 14px 16px;
+            font-family: 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.78em;
+            line-height: 1.45;
+            color: #c9d1d9;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 70vh;
+            overflow-y: auto;
+            min-height: 240px;
+        }
+        .cron-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 16px;
+        }
+        .cron-sidebar {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 6px;
+            max-height: 75vh;
+            overflow-y: auto;
+        }
+        .cron-entry {
+            padding: 9px 11px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            margin-bottom: 2px;
+        }
+        .cron-entry:hover { background: #1f2937; }
+        .cron-entry.active {
+            background: #1f6feb22;
+            border-color: #58a6ff55;
+        }
+        .cron-entry .label {
+            color: #c9d1d9;
+            font-size: 0.88em;
+            font-weight: 500;
+            word-break: break-word;
+        }
+        .cron-entry .meta {
+            color: #484f58;
+            font-size: 0.72em;
+            margin-top: 3px;
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        .cron-entry.active .label { color: #58a6ff; }
+        .cron-detail-header {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 10px;
+            padding: 10px 14px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+        }
+        .cron-detail-header .cmd {
+            color: #8b949e;
+            font-size: 0.78em;
+            font-family: 'SF Mono', Menlo, monospace;
+            word-break: break-all;
+        }
+        .cron-detail-header .file {
+            color: #484f58;
+            font-size: 0.75em;
+        }
+        /* Agents tab — reuses cron-layout structure. */
+        .agent-entry {
+            padding: 9px 11px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .agent-entry:hover { background: #1f2937; }
+        .agent-entry.active {
+            background: #1f6feb22;
+            border-color: #58a6ff55;
+        }
+        .agent-entry .label-wrap { flex: 1; min-width: 0; }
+        .agent-entry .label {
+            color: #c9d1d9;
+            font-size: 0.88em;
+            font-weight: 500;
+            word-break: break-word;
+        }
+        .agent-entry .meta {
+            color: #484f58;
+            font-size: 0.72em;
+            margin-top: 3px;
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        .agent-entry.active .label { color: #58a6ff; }
+        .badge {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .badge.ok      { background: #3fb950; box-shadow: 0 0 6px #3fb95066; }
+        .badge.warn    { background: #ffce56; box-shadow: 0 0 6px #ffce5666; }
+        .badge.fail    { background: #ff6384; box-shadow: 0 0 8px #ff6384aa; }
+        .badge.unknown { background: #484f58; }
+        .agent-detail-header {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 10px;
+            padding: 12px 14px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+        }
+        .agent-detail-header .top {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .agent-detail-header .title {
+            color: #c9d1d9;
+            font-size: 1.0em;
+            font-weight: 600;
+        }
+        .agent-detail-header .grid {
+            display: grid;
+            grid-template-columns: 110px 1fr;
+            gap: 4px 12px;
+            color: #8b949e;
+            font-size: 0.78em;
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        .agent-detail-header .grid .k { color: #484f58; }
+        .agent-detail-header .grid .v { word-break: break-all; }
+        .agent-detail-header .reasons {
+            font-size: 0.8em;
+            margin-top: 4px;
+        }
+        .agent-detail-header .reasons li { margin-left: 18px; }
+        .agent-detail-header .reasons.fail li  { color: #ff6384; }
+        .agent-detail-header .reasons.warn li  { color: #ffce56; }
+        .agent-detail-header .reasons.ok li    { color: #3fb950; }
+        .agent-detail-header .reasons.unknown li { color: #8b949e; }
     </style>
 </head>
 <body>
     <h1>Watchdog</h1>
     <p class="subtitle">System Health Dashboard &middot; Last sample: {{.LastUpdate}}</p>
 
+    <div class="tabs">
+        <button onclick="setTab('dashboard')" id="tab-dashboard" class="active">Dashboard</button>
+        <button onclick="setTab('ssh')" id="tab-ssh">SSH</button>
+        <button onclick="setTab('crons')" id="tab-crons">Crons</button>
+        <button onclick="setTab('agents')" id="tab-agents">Agents</button>
+    </div>
+
+    <div id="panel-dashboard" class="tab-panel active">
     <div class="controls">
         <button onclick="setWindow('4h')" id="btn-4h">4h</button>
         <button onclick="setWindow('24h')" id="btn-24h" class="active">24h</button>
@@ -414,6 +627,74 @@ const dashboardTemplate = `<!DOCTYPE html>
                 </thead>
                 <tbody id="procTableBody"></tbody>
             </table>
+        </div>
+    </div>
+    </div><!-- /panel-dashboard -->
+
+    <div id="panel-ssh" class="tab-panel">
+        <div class="log-toolbar">
+            <label>Window</label>
+            <select id="sshHours" onchange="loadSSH()">
+                <option value="1">1h</option>
+                <option value="24" selected>24h</option>
+                <option value="168">7d</option>
+            </select>
+            <button onclick="loadSSH()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="sshStatus"></span>
+        </div>
+        <div class="log-view" id="sshLog">Select the SSH tab to load logs.</div>
+    </div>
+
+    <div id="panel-agents" class="tab-panel">
+        <div class="log-toolbar">
+            <label>Prefix</label>
+            <select id="agentPrefix" onchange="loadAgents()">
+                <option value="" selected>com.aayushbajaj.</option>
+                <option value="*">all</option>
+            </select>
+            <button onclick="loadAgents()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="agentStatus"></span>
+        </div>
+        <div class="cron-layout">
+            <div class="cron-sidebar" id="agentSidebar">Loading...</div>
+            <div>
+                <div class="agent-detail-header" id="agentHeader" style="display:none">
+                    <div class="top">
+                        <span class="badge" id="agentBadge"></span>
+                        <span class="title" id="agentTitle"></span>
+                    </div>
+                    <div class="grid" id="agentGrid"></div>
+                    <ul class="reasons" id="agentReasons"></ul>
+                </div>
+                <div class="log-view" id="agentLog">Select an agent on the left.</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="panel-crons" class="tab-panel">
+        <div class="log-toolbar">
+            <label>Window</label>
+            <select id="cronHours" onchange="loadCurrentCron()">
+                <option value="1">1h</option>
+                <option value="24" selected>24h</option>
+                <option value="168">7d</option>
+                <option value="720">30d</option>
+            </select>
+            <button onclick="loadCurrentCron()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="cronStatus"></span>
+        </div>
+        <div class="cron-layout">
+            <div class="cron-sidebar" id="cronSidebar">Loading...</div>
+            <div>
+                <div class="cron-detail-header" id="cronHeader" style="display:none">
+                    <div class="cmd" id="cronCmd"></div>
+                    <div class="file" id="cronFile"></div>
+                </div>
+                <div class="log-view" id="cronLog">Select a cron entry on the left.</div>
+            </div>
         </div>
     </div>
 
@@ -641,6 +922,242 @@ function sortTable(col) {
 function refreshDashboard() {
     // Navigate to /refresh which collects fresh data and redirects back to /
     window.location.href = '/refresh';
+}
+
+let currentTab = 'dashboard';
+let sshLoaded = false;
+let cronsLoaded = false;
+let agentsLoaded = false;
+let selectedCronIdx = -1;
+let cronEntries = [];
+let agentEntries = [];
+let selectedAgentLabel = null;
+
+function setTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + tab).classList.add('active');
+
+    if (tab === 'ssh' && !sshLoaded) loadSSH();
+    if (tab === 'crons' && !cronsLoaded) loadCrontabs();
+    if (tab === 'agents' && !agentsLoaded) loadAgents();
+}
+
+async function loadSSH() {
+    const hours = document.getElementById('sshHours').value;
+    const status = document.getElementById('sshStatus');
+    const view = document.getElementById('sshLog');
+    status.textContent = 'Loading...';
+    view.textContent = '';
+    try {
+        const res = await fetch('/api/ssh-log?hours=' + hours);
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        view.textContent = (await res.text()) || '(no entries)';
+        status.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+        sshLoaded = true;
+    } catch (e) {
+        view.textContent = 'Error: ' + e.message + '\n\n(Log endpoints require watchdog serve.)';
+        status.textContent = '';
+    }
+}
+
+async function loadCrontabs() {
+    const sidebar = document.getElementById('cronSidebar');
+    const status = document.getElementById('cronStatus');
+    status.textContent = 'Loading...';
+    try {
+        const res = await fetch('/api/crontabs');
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        cronEntries = await res.json();
+        if (!cronEntries || cronEntries.length === 0) {
+            sidebar.innerHTML = '<div style="padding:12px;color:#484f58;font-size:0.85em">No crontab entries.</div>';
+            status.textContent = '';
+            return;
+        }
+        sidebar.innerHTML = cronEntries.map(e =>
+            '<div class="cron-entry" data-idx="' + e.index + '" onclick="selectCron(' + e.index + ')">' +
+                '<div class="label">' + escapeHtml(e.label) + '</div>' +
+                '<div class="meta">' + escapeHtml(e.schedule) + '</div>' +
+            '</div>'
+        ).join('');
+        cronsLoaded = true;
+        status.textContent = '';
+        if (selectedCronIdx < 0) selectCron(cronEntries[0].index);
+    } catch (e) {
+        sidebar.innerHTML = '<div style="padding:12px;color:#ff6384;font-size:0.85em">Error: ' + escapeHtml(e.message) + '<br><br>(Log endpoints require watchdog serve.)</div>';
+        status.textContent = '';
+    }
+}
+
+function selectCron(idx) {
+    selectedCronIdx = idx;
+    document.querySelectorAll('.cron-entry').forEach(el => {
+        el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
+    });
+    loadCurrentCron();
+}
+
+async function loadCurrentCron() {
+    if (selectedCronIdx < 0) return;
+    const entry = cronEntries.find(e => e.index === selectedCronIdx);
+    if (!entry) return;
+    const hours = document.getElementById('cronHours').value;
+    const status = document.getElementById('cronStatus');
+    const view = document.getElementById('cronLog');
+    const header = document.getElementById('cronHeader');
+    document.getElementById('cronCmd').textContent = entry.command;
+    document.getElementById('cronFile').textContent = entry.logFile ? 'Log file: ' + entry.logFile : 'No log file redirect — falling back to unified log';
+    header.style.display = 'flex';
+    status.textContent = 'Loading...';
+    view.textContent = '';
+    try {
+        const res = await fetch('/api/cron-log?idx=' + selectedCronIdx + '&hours=' + hours);
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        view.textContent = (await res.text()) || '(no entries)';
+        status.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+    } catch (e) {
+        view.textContent = 'Error: ' + e.message;
+        status.textContent = '';
+    }
+}
+
+async function loadAgents() {
+    const sidebar = document.getElementById('agentSidebar');
+    const status = document.getElementById('agentStatus');
+    const prefix = document.getElementById('agentPrefix').value;
+    status.textContent = 'Loading...';
+    try {
+        const url = '/api/launch-agents' + (prefix ? '?prefix=' + encodeURIComponent(prefix) : '');
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        agentEntries = await res.json();
+        if (!agentEntries || agentEntries.length === 0) {
+            sidebar.innerHTML = '<div style="padding:12px;color:#484f58;font-size:0.85em">No launch agents matched.</div>';
+            status.textContent = '';
+            return;
+        }
+        sidebar.innerHTML = agentEntries.map(a => {
+            const sched = a.startInterval ? ('every ' + formatInterval(a.startInterval))
+                       : (a.startCalendar ? 'calendar' : (a.runAtLoad ? 'RunAtLoad' : '-'));
+            const stateBit = a.loaded ? (a.state || 'unknown') : 'not loaded';
+            return '<div class="agent-entry" data-label="' + escapeHtml(a.label) + '">' +
+                '<span class="badge ' + escapeHtml(a.health) + '" title="' + escapeHtml(a.health) + '"></span>' +
+                '<div class="label-wrap">' +
+                    '<div class="label">' + escapeHtml(shortLabel(a.label)) + '</div>' +
+                    '<div class="meta">' + escapeHtml(sched + '  ·  ' + stateBit + (a.runs ? '  ·  ' + a.runs + ' runs' : '')) + '</div>' +
+                '</div>' +
+            '</div>';
+        }).join('');
+        // Event delegation: a single listener on the parent survives re-renders
+        // and avoids HTML-attribute quoting issues with labels that contain dots.
+        if (!sidebar.dataset.bound) {
+            sidebar.addEventListener('click', (ev) => {
+                const row = ev.target.closest('.agent-entry');
+                if (!row || !sidebar.contains(row)) return;
+                const label = row.dataset.label;
+                if (label) selectAgent(label);
+            });
+            sidebar.dataset.bound = '1';
+        }
+        agentsLoaded = true;
+        status.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+        if (!selectedAgentLabel || !agentEntries.find(a => a.label === selectedAgentLabel)) {
+            // Prefer the first agent in a failing state — that's the whole point of this tab.
+            const failing = agentEntries.find(a => a.health === 'fail') ||
+                           agentEntries.find(a => a.health === 'warn') ||
+                           agentEntries[0];
+            selectAgent(failing.label);
+        } else {
+            renderAgentDetail(selectedAgentLabel);
+        }
+    } catch (e) {
+        sidebar.innerHTML = '<div style="padding:12px;color:#ff6384;font-size:0.85em">Error: ' + escapeHtml(e.message) + '<br><br>(Log endpoints require watchdog serve.)</div>';
+        status.textContent = '';
+    }
+}
+
+function shortLabel(s) {
+    // Strip the user's prefix so the list reads more cleanly.
+    if (s && s.startsWith('com.aayushbajaj.')) return s.slice('com.aayushbajaj.'.length);
+    return s;
+}
+
+function formatInterval(sec) {
+    if (sec >= 3600 && sec % 3600 === 0) return (sec/3600) + 'h';
+    if (sec >= 60 && sec % 60 === 0) return (sec/60) + 'min';
+    return sec + 's';
+}
+
+function selectAgent(label) {
+    selectedAgentLabel = label;
+    document.querySelectorAll('.agent-entry').forEach(el => {
+        el.classList.toggle('active', el.dataset.label === label);
+    });
+    renderAgentDetail(label);
+    loadAgentLog(label);
+}
+
+function renderAgentDetail(label) {
+    const a = agentEntries.find(e => e.label === label);
+    if (!a) return;
+    const header = document.getElementById('agentHeader');
+    const badge = document.getElementById('agentBadge');
+    const title = document.getElementById('agentTitle');
+    const grid = document.getElementById('agentGrid');
+    const reasons = document.getElementById('agentReasons');
+    header.style.display = 'flex';
+    badge.className = 'badge ' + (a.health || 'unknown');
+    title.textContent = a.label;
+
+    const rows = [];
+    const push = (k, v) => { if (v !== undefined && v !== null && v !== '' && v !== 0) rows.push([k, v]); };
+    push('program', (a.programArguments && a.programArguments.join(' ')) || a.program);
+    push('plist', a.plistPath);
+    if (a.startInterval) push('schedule', 'StartInterval ' + a.startInterval + 's (' + formatInterval(a.startInterval) + ')');
+    if (a.startCalendar) push('schedule', 'StartCalendarInterval ' + a.startCalendar);
+    if (a.runAtLoad) push('runAtLoad', 'true');
+    push('stdout', a.stdoutPath);
+    if (a.stderrPath && a.stderrPath !== a.stdoutPath) push('stderr', a.stderrPath);
+    // effectiveLog is the file actually used for the stale-log health rule
+    // and the tail below — useful to surface when it differs from stdout
+    // (e.g. wrapper script's foo.log vs launchd's foo.launchd.log).
+    if (a.effectiveLog && a.effectiveLog !== a.stdoutPath) push('effective log', a.effectiveLog);
+    if (a.otherLogs && a.otherLogs.length) push('other logs', a.otherLogs.join('\n'));
+    push('state', (a.loaded ? a.state : 'not loaded'));
+    push('pid', a.pid);
+    if (a.lastExitCode !== undefined && a.lastExitCode !== null) push('last exit', a.lastExitCode);
+    push('runs', a.runs);
+    if (a.logMTime) push('log mtime', a.logMTime);
+    if (a.pidAgeSeconds) push('pid age', a.pidAgeSeconds + 's');
+
+    grid.innerHTML = rows.map(r =>
+        '<div class="k">' + escapeHtml(r[0]) + '</div><div class="v">' + escapeHtml(String(r[1])) + '</div>'
+    ).join('');
+
+    reasons.className = 'reasons ' + (a.health || 'unknown');
+    reasons.innerHTML = (a.healthReasons || []).map(r => '<li>' + escapeHtml(r) + '</li>').join('');
+}
+
+async function loadAgentLog(label) {
+    const view = document.getElementById('agentLog');
+    view.textContent = 'Loading...';
+    try {
+        const res = await fetch('/api/launch-agent-log?label=' + encodeURIComponent(label));
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        const text = await res.text();
+        // Show only the last ~40 lines per the spec — keep the rest available by scrolling.
+        const lines = text.split('\n');
+        const tail = lines.slice(Math.max(0, lines.length - 40)).join('\n');
+        view.textContent = tail || '(no entries)';
+    } catch (e) {
+        view.textContent = 'Error: ' + e.message;
+    }
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 updateCharts();
