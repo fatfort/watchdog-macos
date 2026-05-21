@@ -140,6 +140,12 @@ func menubarOnReady() {
 	menuDashboard = systray.AddMenuItem("Open Dashboard…", "Open http://localhost:9847 in browser")
 	menuQuit = systray.AddMenuItem("Quit", "Stop the menubar app")
 
+	// Shrink the NSStatusBarButton font so two stacked lines fit inside the
+	// menubar's fixed height. fyne.io/systray's default ~14pt overflows; ~9pt
+	// gives us a tight but readable two-row layout, mirroring the iStat /
+	// MenuMeters look.
+	setMenubarFontSize(9)
+
 	go menubarTitleLoop()
 	go menubarSMCLoop()
 	go menubarNetworkLoop()
