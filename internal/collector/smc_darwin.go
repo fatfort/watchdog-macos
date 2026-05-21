@@ -92,8 +92,13 @@ static int smc_read_key(unsigned int key, unsigned char *outBuf, int outBufLen, 
     memset(&out, 0, sizeof(out));
     in.key = key;
     in.keyInfo.dataSize = sz;
-    in.data8 = 5; // SMC_CMD_READ_BYTES
-    r = smc_call(5, &in, &out);
+    in.data8 = 5; // SMC_CMD_READ_BYTES — the operation lives in data8.
+    // AppleSMC's user-client only exposes selector 2 (kSMCHandleYPCEvent);
+    // the earlier code passed selector 5 for the read step which IOKit
+    // silently rejected, producing the "every key returns 0" symptom on
+    // M-series Macs. Selector 2 is the correct call for both keyinfo and
+    // read.
+    r = smc_call(2, &in, &out);
     if (r != kIOReturnSuccess) return -2;
     memcpy(outBuf, out.bytes, sz);
     return (int)sz;
@@ -112,9 +117,24 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"sort"
 	"sync"
 	"unsafe"
 )
+
+// SortDebugRows orders DumpThermalKeys output: temp keys first, then fan;
+// within each group, keys sorted alphabetically for stable output.
+func SortDebugRows(in []SMCDebugRow) []SMCDebugRow {
+	out := make([]SMCDebugRow, len(in))
+	copy(out, in)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind == "temp"
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
 
 var (
 	smcInitOnce sync.Once
@@ -207,13 +227,16 @@ func decodeSMCFloat(data []byte, tag string) (float64, bool) {
 // TC0P/TC0H are Intel's "CPU proximity" and "CPU heatsink" keys.
 func readSMCTemp() float64 {
 	candidates := []string{
-		// Apple Silicon (M1/M2/M3/M4) — performance-core die temps.
-		"Tp09", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0a", "Tp0b",
-		// Apple Silicon — efficient-core, used on fanless Airs.
+		// Apple Silicon performance-core die temps. M4 surfaces Tp00 and Tp0a
+		// as the live "flt " readings (others return zeroed bytes); earlier
+		// chips populate different subsets of this set, so we probe all.
+		"Tp00", "Tp01", "Tp02", "Tp05", "Tp08", "Tp09", "Tp0a", "Tp0b",
+		"Tp0A", "Tp0B", "Tp0D", "Tp0F", "Tp0H", "Tp0L", "Tp10", "Tp11",
+		// Apple Silicon efficient-core temps (live on fanless Airs).
 		"Te05", "Te0L", "Te0P", "Te0S",
-		// Apple Silicon — thermal pressure / package die.
+		// Apple Silicon thermal-pressure / package die.
 		"Tp0T",
-		// Intel.
+		// Intel fallbacks for older Macs.
 		"TC0P", "TC0H", "TC0D", "TC0E",
 	}
 	var best float64
@@ -258,15 +281,98 @@ func readSMCFan() int {
 	return int(max)
 }
 
-// readSMCThermal is the entry point used by collectThermal.
+// readSMCThermal is the entry point used by collectThermal. Returns
+// (temp, rpm, nil) on success, (0, 0, err) when initialisation fails, and
+// (0, rpm, err) when init succeeded but no temperature key produced a
+// plausible reading — that distinction matters because Apple changes its
+// CPU-temp key inventory every couple of chip generations and the alerter
+// menubar's status pip needs to tell the user *why* the cell reads 0°.
 func readSMCThermal() (float64, int, error) {
 	smcInitOnce.Do(func() {
 		if rc := C.smc_init(); rc != 0 {
-			smcInitErr = errors.New("smc_init failed")
+			smcInitErr = errors.New("smc_init failed (IOServiceOpen on AppleSMC)")
 		}
 	})
 	if smcInitErr != nil {
 		return 0, 0, smcInitErr
 	}
-	return readSMCTemp(), readSMCFan(), nil
+	temp := readSMCTemp()
+	fan := readSMCFan()
+	if temp == 0 {
+		return 0, fan, errors.New("no SMC temperature key produced a plausible value")
+	}
+	return temp, fan, nil
+}
+
+// SMCDebugRow is the result of one diagnostic SMC read. Exposed for the
+// `watchdog thermal-debug` subcommand.
+type SMCDebugRow struct {
+	Key     string
+	Kind    string // "temp" | "fan"
+	Found   bool
+	ReadErr string
+	Type    string // SMC type tag, e.g. "sp78", "flt ", "fpe2"
+	Raw     []byte
+	Decoded float64
+	OK      bool // decoder succeeded
+}
+
+// DumpThermalKeys walks every candidate temperature + fan key and returns a
+// row per key with the raw bytes, type, and decoded value. Lets the user
+// see at a glance which key is the live one on their specific chip.
+func DumpThermalKeys() ([]SMCDebugRow, error) {
+	smcInitOnce.Do(func() {
+		if rc := C.smc_init(); rc != 0 {
+			smcInitErr = errors.New("smc_init failed (IOServiceOpen on AppleSMC)")
+		}
+	})
+	if smcInitErr != nil {
+		return nil, smcInitErr
+	}
+	temps := []string{
+		"Tp09", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0a", "Tp0b",
+		"Te05", "Te0L", "Te0P", "Te0S",
+		"Tp0T",
+		"TC0P", "TC0H", "TC0D", "TC0E",
+		// Newer M4-era P-core candidates worth probing if the M1/M2 set is dead.
+		"Tp00", "Tp02", "Tp08", "Tp0A", "Tp0B", "Tp0F", "Tp10", "Tp11",
+	}
+	fans := []string{"F0Ac", "F1Ac", "F2Ac", "F3Ac"}
+
+	var rows []SMCDebugRow
+	for _, k := range temps {
+		row := SMCDebugRow{Key: k, Kind: "temp"}
+		data, tag, err := readSMCKey(k)
+		if err != nil {
+			row.ReadErr = err.Error()
+			rows = append(rows, row)
+			continue
+		}
+		row.Found = true
+		row.Type = tag
+		row.Raw = data
+		if v, ok := decodeSMCFloat(data, tag); ok {
+			row.Decoded = v
+			row.OK = true
+		}
+		rows = append(rows, row)
+	}
+	for _, k := range fans {
+		row := SMCDebugRow{Key: k, Kind: "fan"}
+		data, tag, err := readSMCKey(k)
+		if err != nil {
+			row.ReadErr = err.Error()
+			rows = append(rows, row)
+			continue
+		}
+		row.Found = true
+		row.Type = tag
+		row.Raw = data
+		if v, ok := decodeSMCFloat(data, tag); ok {
+			row.Decoded = v
+			row.OK = true
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }

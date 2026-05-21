@@ -13,6 +13,7 @@ import (
 	"fyne.io/systray"
 	"github.com/abaj8494/macos-watchdog/internal/collector"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
+	"github.com/abaj8494/macos-watchdog/internal/typtel"
 	"github.com/spf13/cobra"
 )
 
@@ -100,6 +101,7 @@ var (
 	menuFanLine    *systray.MenuItem
 	menuRxLine     *systray.MenuItem
 	menuTxLine     *systray.MenuItem
+	menuTyptelLine *systray.MenuItem // hidden unless `typtel` is on PATH
 	menuStatusLine *systray.MenuItem
 )
 
@@ -125,6 +127,12 @@ func menubarOnReady() {
 	menuTxLine.Disable()
 	systray.AddSeparator()
 
+	// Optional typtel cross-link — hidden when typing-telemetry isn't installed.
+	menuTyptelLine = systray.AddMenuItem("⌨  Typing today —", "Today's typing-telemetry stats (requires typtel on PATH)")
+	menuTyptelLine.Disable()
+	menuTyptelLine.Hide()
+	systray.AddSeparator()
+
 	menuStatusLine = systray.AddMenuItem("◌  starting…", "")
 	menuStatusLine.Disable()
 	systray.AddSeparator()
@@ -135,7 +143,20 @@ func menubarOnReady() {
 	go menubarTitleLoop()
 	go menubarSMCLoop()
 	go menubarNetworkLoop()
+	go menubarTyptelLoop()
 	go menubarEventLoop()
+}
+
+// menubarTyptelLoop refreshes the optional typing-telemetry dropdown line
+// every 60s. typtel reads its own SQLite so the call is cheap, but
+// keystrokes don't change that quickly — minute cadence is fine.
+func menubarTyptelLoop() {
+	refreshTyptel()
+	t := time.NewTicker(60 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		refreshTyptel()
+	}
 }
 
 func menubarOnExit() {}
@@ -153,11 +174,13 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle assembles every readout into one compact line. Format:
+// paintTitle assembles every readout into a two-line title. macOS NSStatusItem
+// renders newlines if the platform plays along; if not, the line break
+// degrades gracefully into a single visible line (whichever half macOS
+// truncates to). Format:
 //
-//	NN° · ↓X.XX  ↑Y.YY     (fan omitted when 0; sits in dropdown instead)
-//
-// Mirrors iStatistica's text layout but in a single non-cycling string.
+//	NN° NNNNrpm
+//	↓X.XX ↑Y.YY
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -166,15 +189,9 @@ func paintTitle() {
 	tx := state.netTxToday
 	state.mu.RUnlock()
 
-	thermal := fmt.Sprintf("%d°", int(tempC+0.5))
-	if fanRPM > 0 {
-		thermal = fmt.Sprintf("%s %drpm", thermal, fanRPM)
-	}
-	net := fmt.Sprintf("↓%s%s ↑%s%s",
-		thinSpace, formatTitleBytes(rx),
-		thinSpace, formatTitleBytes(tx))
-
-	systray.SetTitle(thermal + midDot + net)
+	thermal := fmt.Sprintf("%d° %drpm", int(tempC+0.5), fanRPM)
+	net := fmt.Sprintf("↓%s ↑%s", formatTitleBytes(rx), formatTitleBytes(tx))
+	systray.SetTitle(thermal + "\n" + net)
 }
 
 func menubarSMCLoop() {
@@ -244,6 +261,20 @@ func updateDropdown() {
 	} else {
 		menuStatusLine.SetTitle("✕  " + state.lastErr)
 	}
+}
+
+// refreshTyptel polls typing-telemetry (optional dep). Shows the dropdown
+// item only when typtel is installed and responsive; otherwise hidden so the
+// menu stays clean for users who don't run the companion app.
+func refreshTyptel() {
+	stats, ok, err := typtel.Fetch()
+	if !ok || err != nil {
+		menuTyptelLine.Hide()
+		return
+	}
+	menuTyptelLine.SetTitle(fmt.Sprintf("⌨  %d keys · %d clicks today",
+		stats.Keystrokes, stats.MouseClicks))
+	menuTyptelLine.Show()
 }
 
 // menubarEventLoop watches the click channels on the actionable menu items

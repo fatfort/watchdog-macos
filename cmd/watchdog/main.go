@@ -89,6 +89,42 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(topCmd)
 	rootCmd.AddCommand(menubarCmd)
+	rootCmd.AddCommand(thermalDebugCmd)
+}
+
+var thermalDebugCmd = &cobra.Command{
+	Use:   "thermal-debug",
+	Short: "Print raw SMC reads for each candidate temperature/fan key",
+	Long: `Dump every SMC key the thermal collector probes, with its type tag,
+raw bytes (hex), decoded value, and whether the decoder accepted it.
+Useful for diagnosing 0 °C / 0 rpm readings on newer chips where Apple
+has shuffled the key inventory.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		rows, err := collector.DumpThermalKeys()
+		if err != nil {
+			return fmt.Errorf("dump SMC: %w", err)
+		}
+		fmt.Printf("%-6s %-5s %-7s %-8s %-32s %-10s %s\n",
+			"key", "kind", "found", "type", "raw", "decoded", "note")
+		fmt.Println("------ ----- ------- -------- -------------------------------- ---------- ----")
+		for _, r := range collector.SortDebugRows(rows) {
+			note := ""
+			if !r.Found {
+				note = r.ReadErr
+			} else if !r.OK {
+				note = "decoder rejected"
+			} else if r.Kind == "temp" && (r.Decoded < 5 || r.Decoded > 125) {
+				note = "implausible (filtered)"
+			}
+			rawHex := ""
+			for _, b := range r.Raw {
+				rawHex += fmt.Sprintf("%02x ", b)
+			}
+			fmt.Printf("%-6s %-5s %-7t %-8q %-32s %-10.2f %s\n",
+				r.Key, r.Kind, r.Found, r.Type, rawHex, r.Decoded, note)
+		}
+		return nil
+	},
 }
 
 func main() {
