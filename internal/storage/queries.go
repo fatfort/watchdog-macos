@@ -5,12 +5,29 @@ import (
 	"time"
 )
 
+// systemSampleColumns lists every column read into a SystemSample. The
+// power/IO columns were added via ALTER TABLE migrations, so old rows have
+// NULL values — COALESCE pins them to safe defaults (-1 battery = "unknown",
+// "" power source, 0 for the rest) so Scan into non-nullable Go types works.
+const systemSampleColumns = `id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
+       pageins, pageouts, compressor_pages, swapins, swapouts,
+       COALESCE(battery_pct, -1), COALESCE(power_source, ''), COALESCE(charging, 0),
+       COALESCE(disk_read_kb_per_sec, 0), COALESCE(disk_write_kb_per_sec, 0), COALESCE(disk_tps, 0)`
+
+func scanSystemSample(scan func(...interface{}) error, s *SystemSample) error {
+	return scan(&s.ID, &s.Timestamp, &s.Load1, &s.Load5, &s.Load15,
+		&s.Ncpu, &s.MemPressure, &s.SwapUsedGB,
+		&s.Pageins, &s.Pageouts, &s.CompressorPages,
+		&s.Swapins, &s.Swapouts,
+		&s.BatteryPct, &s.PowerSource, &s.Charging,
+		&s.DiskReadKBPerSec, &s.DiskWriteKBPerSec, &s.DiskTPS)
+}
+
 // GetSystemTimeSeries returns system samples for the last N hours.
 func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
-		        pageins, pageouts, compressor_pages, swapins, swapouts
+		`SELECT `+systemSampleColumns+`
 		 FROM system_samples WHERE timestamp >= ? ORDER BY timestamp ASC`, cutoff,
 	)
 	if err != nil {
@@ -21,10 +38,7 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 	var samples []SystemSample
 	for rows.Next() {
 		var s SystemSample
-		if err := rows.Scan(&s.ID, &s.Timestamp, &s.Load1, &s.Load5, &s.Load15,
-			&s.Ncpu, &s.MemPressure, &s.SwapUsedGB,
-			&s.Pageins, &s.Pageouts, &s.CompressorPages,
-			&s.Swapins, &s.Swapouts); err != nil {
+		if err := scanSystemSample(rows.Scan, &s); err != nil {
 			return nil, err
 		}
 		samples = append(samples, s)
@@ -35,15 +49,11 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 // GetLatestSample returns the most recent system sample.
 func (s *Store) GetLatestSample() (*SystemSample, error) {
 	var sample SystemSample
-	err := s.db.QueryRow(
-		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
-		        pageins, pageouts, compressor_pages, swapins, swapouts
+	row := s.db.QueryRow(
+		`SELECT ` + systemSampleColumns + `
 		 FROM system_samples ORDER BY id DESC LIMIT 1`,
-	).Scan(&sample.ID, &sample.Timestamp, &sample.Load1, &sample.Load5, &sample.Load15,
-		&sample.Ncpu, &sample.MemPressure, &sample.SwapUsedGB,
-		&sample.Pageins, &sample.Pageouts, &sample.CompressorPages,
-		&sample.Swapins, &sample.Swapouts)
-	if err != nil {
+	)
+	if err := scanSystemSample(row.Scan, &sample); err != nil {
 		return nil, err
 	}
 	return &sample, nil

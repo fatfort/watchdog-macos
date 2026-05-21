@@ -183,6 +183,27 @@ func showSummary() error {
 	fmt.Printf("Memory Pressure:       avg=%d%%   max=%d%%\n", int(stats.AvgPressure), stats.MaxPressure)
 	fmt.Printf("Swap Usage:            avg=%.1fGB max=%.1fGB\n", stats.AvgSwap, stats.MaxSwap)
 
+	// Power + IO come from the latest sample only — they're point-in-time
+	// signals, not aggregates. Both are soft-fail collectors so this whole
+	// block is skipped on read errors / empty DB.
+	if latest, err := store.GetLatestSample(); err == nil {
+		battStr := "n/a"
+		if latest.BatteryPct >= 0 {
+			charge := ""
+			if latest.Charging {
+				charge = " (charging)"
+			}
+			battStr = fmt.Sprintf("%d%%%s", latest.BatteryPct, charge)
+		}
+		src := latest.PowerSource
+		if src == "" {
+			src = "unknown"
+		}
+		fmt.Printf("Power:                 source=%s  battery=%s\n", src, battStr)
+		fmt.Printf("Disk IO (last sample): %.1f KB/s, %.0f tps\n",
+			latest.DiskReadKBPerSec, latest.DiskTPS)
+	}
+
 	// Show process table
 	table, err := store.GetProcessTable(summaryHours)
 	if err == nil && len(table) > 0 {
