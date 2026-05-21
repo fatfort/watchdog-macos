@@ -38,9 +38,12 @@ const (
 	thinSpace = " "
 	// midDot separates logical groups (thermal vs network).
 	midDot = " · "
-	// menubarFontSize: 10pt fits two rows in macOS menubar height while
-	// staying legible. 9pt feels cramped; 11pt clips on some users.
-	menubarFontSize = 10.0
+	// menubarFontSize: 7pt keeps the 2-row stacked layout inside the
+	// macOS menubar's standard ~22pt height — same vertical footprint
+	// as typtel and other single-line menubar apps. Bigger values
+	// cause macOS to expand the bar, which the user explicitly
+	// pushed back on.
+	menubarFontSize = 7.0
 )
 
 var menubarCmd = &cobra.Command{

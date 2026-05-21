@@ -48,8 +48,13 @@ static void runOnMain(void (^block)(void)) {
 static NSTextAttachment *sfSymbolAttachmentChain(NSArray<NSString *> *names,
                                                    double textSize) {
     if (@available(macOS 11.0, *)) {
+        // Icon point size tuned so the symbol matches two stacked text
+        // rows in height — at 7pt font + lineSpacing -3 the total row
+        // pair is ~12pt tall, so we want the icon glyph in that
+        // ballpark. 1.6x gives slight overshoot which reads as "spans
+        // both rows" without expanding the menubar height.
         NSImageSymbolConfiguration *cfg =
-            [NSImageSymbolConfiguration configurationWithPointSize:textSize * 1.8
+            [NSImageSymbolConfiguration configurationWithPointSize:textSize * 1.6
                                                             weight:NSFontWeightMedium];
         for (NSString *n in names) {
             NSImage *img = [NSImage imageWithSystemSymbolName:n
@@ -59,12 +64,12 @@ static NSTextAttachment *sfSymbolAttachmentChain(NSArray<NSString *> *names,
             img.template = YES; // monochrome, follows menubar tint
             NSTextAttachment *att = [[NSTextAttachment alloc] init];
             att.image = img;
-            // Drop the icon below the baseline so its visual centre sits
-            // between row 1 and row 2 — the appearance of "spanning"
-            // both rows the user asked for.
+            // Small downward offset so the glyph's vertical centre lands
+            // between the two text rows. Larger offsets pushed the
+            // menubar's total height above the system limit (~22pt).
             CGFloat h = img.size.height;
             CGFloat w = img.size.width;
-            att.bounds = NSMakeRect(0, -h * 0.30, w, h);
+            att.bounds = NSMakeRect(0, -h * 0.18, w, h);
             return att;
         }
     }
@@ -111,8 +116,9 @@ static NSAttributedString *renderCombinedTitle(double size,
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = NSTextAlignmentLeft;
     para.lineBreakMode = NSLineBreakByClipping;
-    para.lineSpacing = -2.0;             // tight stack
+    para.lineSpacing = -3.0;             // tight enough to fit menubar height
     para.paragraphSpacingBefore = 0;
+    para.maximumLineHeight = size + 2;   // hard ceiling so we never push the bar taller
     para.tabStops = @[
         [[NSTextTab alloc] initWithType:NSLeftTabStopType location:textCol1],
         [[NSTextTab alloc] initWithType:NSLeftTabStopType location:iconCol2],
