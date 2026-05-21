@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/color"
 	"image/png"
 	"os/exec"
 	"sync"
@@ -17,31 +16,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// chartBarsIcon returns a 22×22 template PNG of four ascending bars — a
-// generic "monitoring" mark that macOS recolors to match the menubar
-// appearance (white on dark mode, black on light, blue when clicked).
-// fyne.io/systray panics on an empty buffer, so any valid template works
-// and this one reads as "stats" at a glance.
-func chartBarsIcon() []byte {
-	const size = 22
-	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	mark := color.NRGBA{0, 0, 0, 255} // alpha mask — macOS supplies the colour
-	heights := []int{6, 10, 14, 18}
-	barW, gap := 3, 2
-	totalW := len(heights)*barW + (len(heights)-1)*gap
-	startX := (size - totalW) / 2
-	baseY := size - 2
-	for i, h := range heights {
-		x0 := startX + i*(barW+gap)
-		y0 := baseY - h
-		for y := y0; y < baseY; y++ {
-			for x := x0; x < x0+barW; x++ {
-				img.Set(x, y, mark)
-			}
-		}
-	}
+// transparentIcon returns the smallest valid PNG that fyne.io/systray
+// will accept. The primary status item's icon slot ends up blank — the
+// visible icons come from the SF Symbol attachments inside each widget's
+// attributedTitle, which is the iStat look the user asked for.
+func transparentIcon() []byte {
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
+	_ = png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1, 1)))
 	return buf.Bytes()
 }
 
@@ -106,8 +87,11 @@ var (
 )
 
 func menubarOnReady() {
-	// Template icon: macOS recolors to match menubar appearance.
-	icon := chartBarsIcon()
+	// fyne.io/systray requires *some* icon bytes (NSImage decode panics on
+	// empty), but the visible icon for each widget is the SF Symbol baked
+	// into its attributedTitle — so the primary status item gets a 1×1
+	// transparent stub here.
+	icon := transparentIcon()
 	systray.SetTemplateIcon(icon, icon)
 	systray.SetTitle(thinSpace + "…")
 	systray.SetTooltip("macos-watchdog — live system stats")
@@ -140,11 +124,9 @@ func menubarOnReady() {
 	menuDashboard = systray.AddMenuItem("Open Dashboard…", "Open http://localhost:9847 in browser")
 	menuQuit = systray.AddMenuItem("Quit", "Stop the menubar app")
 
-	// Shrink the NSStatusBarButton font so two stacked lines fit inside the
-	// menubar's fixed height. fyne.io/systray's default ~14pt overflows; ~9pt
-	// gives us a tight but readable two-row layout. Empty title means
-	// "configure the cell only — paintTitle will supply the actual text".
-	setMenubarFontSize(9, "")
+	// Configure the cell only — paintTitle supplies the actual content. The
+	// secondary status item is created lazily on first setMenubarSecondary call.
+	setMenubarPrimary(9, "", "", "")
 
 	go menubarTitleLoop()
 	go menubarSMCLoop()
@@ -180,12 +162,12 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle assembles every readout into a two-line title that mirrors the
-// iStatistica Pro layout: a thermometer prefix on the thermal row and a
-// globe prefix on the network row, both rendered in the menubar font.
+// paintTitle paints the two side-by-side widgets that together mirror
+// the iStatistica Pro layout — one NSStatusItem per widget so they read
+// as independent stats rather than rows of a single mixed display:
 //
-//	🌡 NN° NNNNrpm
-//	🌐 ↓X.XX ↑Y.YY
+//	[thermometer] NN°       [globe] ↓X.XX
+//	              NNNNrpm           ↑Y.YY
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -194,15 +176,18 @@ func paintTitle() {
 	tx := state.netTxToday
 	state.mu.RUnlock()
 
-	thermal := fmt.Sprintf("🌡 %d° %drpm", int(tempC+0.5), fanRPM)
-	net := fmt.Sprintf("🌐 ↓%s ↑%s", formatTitleBytes(rx), formatTitleBytes(tx))
-	title := thermal + "\n" + net
-	// systray.SetTitle goes through NSButton.title which strips newlines and
-	// flattens emoji to plain text; route the real paint through the cgo
-	// helper that sets attributedTitle with paragraph spacing + a font that
-	// renders the emoji as the inline iStat-style icons.
-	systray.SetTitle(title) // keep fyne's internal cache in sync
-	setMenubarFontSize(9, title)
+	tempRow1 := fmt.Sprintf("%d°", int(tempC+0.5))
+	tempRow2 := fmt.Sprintf("%drpm", fanRPM)
+	netRow1 := fmt.Sprintf("↓%s", formatTitleBytes(rx))
+	netRow2 := fmt.Sprintf("↑%s", formatTitleBytes(tx))
+
+	// systray.SetTitle keeps fyne's internal cache sane (and provides a
+	// text fallback if attributedTitle ever fails to take); the visible
+	// primary item is whatever setMenubarPrimary paints last.
+	systray.SetTitle(tempRow1 + " " + tempRow2)
+
+	setMenubarPrimary(9, "thermometer.medium", tempRow1, tempRow2)
+	setMenubarSecondary(9, "globe", netRow1, netRow2)
 }
 
 func menubarSMCLoop() {
