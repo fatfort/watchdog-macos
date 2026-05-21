@@ -134,6 +134,53 @@ func main() {
 	}
 }
 
+// computeTodayNetwork returns (rxToday, txToday) for a new sample by
+// adding the positive delta from the previous sample's raw counters to
+// the previous sample's running total. Handles two edge cases:
+//
+//   - Reboot between samples (raw counters reset, delta < 0): we add the
+//     current raw value as "today's traffic since boot" — slightly
+//     underestimates the gap between last sample and reboot, but never
+//     produces a negative delta.
+//   - New local day: running total resets to the current raw value
+//     (close approximation since the boot-to-midnight chunk is lost
+//     anyway when the daemon starts mid-day).
+//
+// First sample ever: running total = current raw value.
+func computeTodayNetwork(store *storage.Store, current storage.SystemSample) (int64, int64) {
+	prev, err := store.GetLatestSample()
+	if err != nil || prev == nil {
+		return current.NetRxBytes, current.NetTxBytes
+	}
+	if !sameLocalDay(prev.Timestamp, current.Timestamp) {
+		return current.NetRxBytes, current.NetTxBytes
+	}
+	rxDelta := current.NetRxBytes - prev.NetRxBytes
+	if rxDelta < 0 {
+		rxDelta = current.NetRxBytes // counter reset; treat current as since-boot delta
+	}
+	txDelta := current.NetTxBytes - prev.NetTxBytes
+	if txDelta < 0 {
+		txDelta = current.NetTxBytes
+	}
+	return prev.NetRxToday + rxDelta, prev.NetTxToday + txDelta
+}
+
+// sameLocalDay returns true when two RFC3339 timestamps fall on the
+// same date in the local timezone — used to trigger the daily roll-over
+// for the network running total.
+func sameLocalDay(aISO, bISO string) bool {
+	a, errA := time.Parse(time.RFC3339, aISO)
+	b, errB := time.Parse(time.RFC3339, bISO)
+	if errA != nil || errB != nil {
+		return false
+	}
+	aLocal := a.Local()
+	bLocal := b.Local()
+	return aLocal.Year() == bLocal.Year() &&
+		aLocal.YearDay() == bLocal.YearDay()
+}
+
 func runCollect() error {
 	store, err := storage.New()
 	if err != nil {
@@ -145,6 +192,12 @@ func runCollect() error {
 	if err != nil {
 		return fmt.Errorf("failed to collect: %w", err)
 	}
+
+	// Compute today's running network total. The raw NetRxBytes /
+	// NetTxBytes counters are cumulative since boot, so they reset on
+	// reboot; storing a running total on each sample makes the value
+	// survive reboots and roll over cleanly at local midnight.
+	result.System.NetRxToday, result.System.NetTxToday = computeTodayNetwork(store, result.System)
 
 	sampleID, err := store.InsertSystemSample(result.System)
 	if err != nil {

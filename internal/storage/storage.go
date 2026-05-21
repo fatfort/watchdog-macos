@@ -53,6 +53,11 @@ type SystemSample struct {
 	// latest sample (see GetTodayNetworkUsage).
 	NetRxBytes int64
 	NetTxBytes int64
+	// NetRxToday / NetTxToday are the cumulative bytes since local midnight,
+	// computed at collect time so the value survives reboots that reset the
+	// raw NetRxBytes / NetTxBytes counters. Rolls over at midnight local.
+	NetRxToday int64
+	NetTxToday int64
 }
 
 type ProcessSample struct {
@@ -182,6 +187,8 @@ func initSchema(db *sql.DB) error {
 		`ALTER TABLE system_samples ADD COLUMN fan_rpm INTEGER DEFAULT 0`,
 		`ALTER TABLE system_samples ADD COLUMN net_rx_bytes INTEGER DEFAULT 0`,
 		`ALTER TABLE system_samples ADD COLUMN net_tx_bytes INTEGER DEFAULT 0`,
+		`ALTER TABLE system_samples ADD COLUMN net_rx_today INTEGER DEFAULT 0`,
+		`ALTER TABLE system_samples ADD COLUMN net_tx_today INTEGER DEFAULT 0`,
 	}
 	for _, stmt := range migrations {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -193,8 +200,8 @@ func initSchema(db *sql.DB) error {
 
 func (s *Store) InsertSystemSample(sample SystemSample) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, battery_pct, power_source, charging, disk_read_kb_per_sec, disk_write_kb_per_sec, disk_tps, temp_c, fan_rpm, net_rx_bytes, net_tx_bytes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, battery_pct, power_source, charging, disk_read_kb_per_sec, disk_write_kb_per_sec, disk_tps, temp_c, fan_rpm, net_rx_bytes, net_tx_bytes, net_rx_today, net_tx_today)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sample.Timestamp, sample.Load1, sample.Load5, sample.Load15,
 		sample.Ncpu, sample.MemPressure, sample.SwapUsedGB,
 		sample.Pageins, sample.Pageouts, sample.CompressorPages,
@@ -202,6 +209,7 @@ func (s *Store) InsertSystemSample(sample SystemSample) (int64, error) {
 		sample.BatteryPct, sample.PowerSource, sample.Charging,
 		sample.DiskReadKBPerSec, sample.DiskWriteKBPerSec, sample.DiskTPS,
 		sample.TempC, sample.FanRPM, sample.NetRxBytes, sample.NetTxBytes,
+		sample.NetRxToday, sample.NetTxToday,
 	)
 	if err != nil {
 		return 0, err
