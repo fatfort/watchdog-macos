@@ -180,13 +180,12 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle assembles every readout into a two-line title. macOS NSStatusItem
-// renders newlines if the platform plays along; if not, the line break
-// degrades gracefully into a single visible line (whichever half macOS
-// truncates to). Format:
+// paintTitle assembles every readout into a two-line title that mirrors the
+// iStatistica Pro layout: a thermometer prefix on the thermal row and a
+// globe prefix on the network row, both rendered in the menubar font.
 //
-//	NN° NNNNrpm
-//	↓X.XX ↑Y.YY
+//	🌡 NN° NNNNrpm
+//	🌐 ↓X.XX ↑Y.YY
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -195,13 +194,14 @@ func paintTitle() {
 	tx := state.netTxToday
 	state.mu.RUnlock()
 
-	thermal := fmt.Sprintf("%d° %drpm", int(tempC+0.5), fanRPM)
-	net := fmt.Sprintf("↓%s ↑%s", formatTitleBytes(rx), formatTitleBytes(tx))
+	thermal := fmt.Sprintf("🌡 %d° %drpm", int(tempC+0.5), fanRPM)
+	net := fmt.Sprintf("🌐 ↓%s ↑%s", formatTitleBytes(rx), formatTitleBytes(tx))
 	title := thermal + "\n" + net
-	// systray.SetTitle goes through NSButton.title which strips newlines.
-	// Route the actual paint through our cgo helper that sets attributedTitle
-	// with a paragraph style that respects \n.
-	systray.SetTitle(title) // keeps fyne's internal cache in sync
+	// systray.SetTitle goes through NSButton.title which strips newlines and
+	// flattens emoji to plain text; route the real paint through the cgo
+	// helper that sets attributedTitle with paragraph spacing + a font that
+	// renders the emoji as the inline iStat-style icons.
+	systray.SetTitle(title) // keep fyne's internal cache in sync
 	setMenubarFontSize(9, title)
 }
 

@@ -61,7 +61,13 @@ static void patchMenubarFont(double size, const char *text) {
             NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
             para.alignment = NSTextAlignmentLeft;
             para.lineBreakMode = NSLineBreakByClipping;
-            para.lineSpacing = -2; // pull the two rows tight
+            // Positive lineSpacing gives the temp row breathing room from the
+            // top of the menubar — the prior -2 was too tight and the icons
+            // rendered touching the menubar's top edge.
+            para.lineSpacing = 1.0;
+            // paragraphSpacingBefore puts pixels ABOVE the first line so it
+            // doesn't bleed into the menubar top border.
+            para.paragraphSpacingBefore = 1.0;
             NSDictionary *attrs = @{
                 NSFontAttributeName: font,
                 NSParagraphStyleAttributeName: para,
