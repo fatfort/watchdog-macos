@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -16,25 +16,46 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// transparentIcon returns the bytes of a 1×1 fully-transparent PNG. fyne.io
-// systray on macOS won't accept an empty buffer (NSImage decode panics), and
-// we want to display the title text only, so the smallest valid PNG keeps
-// the icon slot from drawing while satisfying the library.
-func transparentIcon() []byte {
+// chartBarsIcon returns a 22×22 template PNG of four ascending bars — a
+// generic "monitoring" mark that macOS recolors to match the menubar
+// appearance (white on dark mode, black on light, blue when clicked).
+// fyne.io/systray panics on an empty buffer, so any valid template works
+// and this one reads as "stats" at a glance.
+func chartBarsIcon() []byte {
+	const size = 22
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	mark := color.NRGBA{0, 0, 0, 255} // alpha mask — macOS supplies the colour
+	heights := []int{6, 10, 14, 18}
+	barW, gap := 3, 2
+	totalW := len(heights)*barW + (len(heights)-1)*gap
+	startX := (size - totalW) / 2
+	baseY := size - 2
+	for i, h := range heights {
+		x0 := startX + i*(barW+gap)
+		y0 := baseY - h
+		for y := y0; y < baseY; y++ {
+			for x := x0; x < x0+barW; x++ {
+				img.Set(x, y, mark)
+			}
+		}
+	}
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1, 1)))
+	_ = png.Encode(&buf, img)
 	return buf.Bytes()
 }
 
-// Menubar refresh cadence. SMC reads are cheap so we poll every 2s; the
-// today's-network query hits sqlite and is comparatively heavy, so it's
-// every 30s. The title alternates between the two readouts every 5s, which
-// is the same cycle iStatistica uses by default.
 const (
+	// SMC is cheap (cgo + IOKit, ~ms); poll every 2s for a live feel.
 	smcRefreshInterval = 2 * time.Second
+	// Today's-network delta hits sqlite — heavier, poll every 30s.
 	netRefreshInterval = 30 * time.Second
-	titleCycleInterval = 5 * time.Second
-	dashboardURL       = "http://localhost:9847"
+	// Title repaint cadence; cheap because it reads cached state under RLock.
+	titleRepaintInterval = 2 * time.Second
+	dashboardURL         = "http://localhost:9847"
+	// thinSpace gives the title room to breathe without looking gappy.
+	thinSpace = " "
+	// midDot separates logical groups (thermal vs network).
+	midDot = " · "
 )
 
 var menubarCmd = &cobra.Command{
@@ -44,9 +65,10 @@ var menubarCmd = &cobra.Command{
 CPU temperature, and fan RPM into the macOS menubar. Designed to be driven
 by its own LaunchAgent; do not run multiple instances.
 
-The menubar title cycles every ~5s between:
-  1. ↓X.XX ↑Y.YY    today's network in GB (rx then tx)
-  2. NN°C  NNNNrpm  current temperature + max fan speed`,
+Menubar title format (all values on one line, refreshes every 2s):
+  NN° · ↓X.XX  ↑Y.YY
+
+Fan RPM and full readouts live in the dropdown to keep the title compact.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		systray.Run(menubarOnReady, menubarOnExit)
 		return nil
@@ -71,7 +93,6 @@ type menubarState struct {
 
 var (
 	state          menubarState
-	titlePhase     atomic.Int32 // 0 = network, 1 = thermal
 	menuQuit       *systray.MenuItem
 	menuDashboard  *systray.MenuItem
 	menuTitle      *systray.MenuItem
@@ -83,32 +104,32 @@ var (
 )
 
 func menubarOnReady() {
-	// fyne.io/systray on macOS hands the icon bytes to NSImage; an empty
-	// buffer panics, so we hand it a tiny 1×1 transparent PNG to leave the
-	// icon slot effectively blank and let the title text carry the display.
-	systray.SetIcon(transparentIcon())
-	systray.SetTitle("watchdog…")
-	systray.SetTooltip("macos-watchdog")
+	// Template icon: macOS recolors to match menubar appearance.
+	icon := chartBarsIcon()
+	systray.SetTemplateIcon(icon, icon)
+	systray.SetTitle(thinSpace + "…")
+	systray.SetTooltip("macos-watchdog — live system stats")
 
 	menuTitle = systray.AddMenuItem("macos-watchdog", "")
 	menuTitle.Disable()
 	systray.AddSeparator()
 
-	menuRxLine = systray.AddMenuItem("Net ↓ —", "Today's received bytes (since local midnight)")
-	menuRxLine.Disable()
-	menuTxLine = systray.AddMenuItem("Net ↑ —", "Today's transmitted bytes (since local midnight)")
-	menuTxLine.Disable()
-	menuTempLine = systray.AddMenuItem("Temp —", "Current CPU die temperature")
+	menuTempLine = systray.AddMenuItem("🌡  Temp —", "Current CPU die temperature")
 	menuTempLine.Disable()
-	menuFanLine = systray.AddMenuItem("Fan —", "Current fan speed")
+	menuFanLine = systray.AddMenuItem("❉  Fan —", "Current max fan speed")
 	menuFanLine.Disable()
 	systray.AddSeparator()
+	menuRxLine = systray.AddMenuItem("↓  Net —", "Today's received bytes (since local midnight)")
+	menuRxLine.Disable()
+	menuTxLine = systray.AddMenuItem("↑  Net —", "Today's transmitted bytes (since local midnight)")
+	menuTxLine.Disable()
+	systray.AddSeparator()
 
-	menuStatusLine = systray.AddMenuItem("status: starting…", "")
+	menuStatusLine = systray.AddMenuItem("◌  starting…", "")
 	menuStatusLine.Disable()
 	systray.AddSeparator()
 
-	menuDashboard = systray.AddMenuItem("Open Dashboard", "Open http://localhost:9847 in browser")
+	menuDashboard = systray.AddMenuItem("Open Dashboard…", "Open http://localhost:9847 in browser")
 	menuQuit = systray.AddMenuItem("Quit", "Stop the menubar app")
 
 	go menubarTitleLoop()
@@ -119,20 +140,24 @@ func menubarOnReady() {
 
 func menubarOnExit() {}
 
-// menubarTitleLoop alternates the menubar title text between the two
-// readouts at titleCycleInterval. iStat does the same — the limited
-// menubar real estate makes packing both onto one line unreadable.
+// menubarTitleLoop repaints the menubar title every titleRepaintInterval.
+// Cheap because paintTitle reads cached state under an RLock — the SMC and
+// network loops do the actual work; this just refreshes the text in case a
+// repaint was missed between background updates.
 func menubarTitleLoop() {
-	// Paint immediately so the menubar doesn't sit on "watchdog…" for 5s.
 	paintTitle()
-	t := time.NewTicker(titleCycleInterval)
+	t := time.NewTicker(titleRepaintInterval)
 	defer t.Stop()
 	for range t.C {
-		titlePhase.Store(1 - titlePhase.Load())
 		paintTitle()
 	}
 }
 
+// paintTitle assembles every readout into one compact line. Format:
+//
+//	NN° · ↓X.XX  ↑Y.YY     (fan omitted when 0; sits in dropdown instead)
+//
+// Mirrors iStatistica's text layout but in a single non-cycling string.
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -141,14 +166,15 @@ func paintTitle() {
 	tx := state.netTxToday
 	state.mu.RUnlock()
 
-	var title string
-	switch titlePhase.Load() {
-	case 0:
-		title = fmt.Sprintf("↓%s ↑%s", formatBytesShort(rx), formatBytesShort(tx))
-	default:
-		title = fmt.Sprintf("%d°C %drpm", int(tempC+0.5), fanRPM)
+	thermal := fmt.Sprintf("%d°", int(tempC+0.5))
+	if fanRPM > 0 {
+		thermal = fmt.Sprintf("%s %drpm", thermal, fanRPM)
 	}
-	systray.SetTitle(title)
+	net := fmt.Sprintf("↓%s%s ↑%s%s",
+		thinSpace, formatTitleBytes(rx),
+		thinSpace, formatTitleBytes(tx))
+
+	systray.SetTitle(thermal + midDot + net)
 }
 
 func menubarSMCLoop() {
@@ -209,14 +235,14 @@ func refreshNetwork() {
 func updateDropdown() {
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	menuRxLine.SetTitle(fmt.Sprintf("Net ↓ %s today", formatBytesLong(state.netRxToday)))
-	menuTxLine.SetTitle(fmt.Sprintf("Net ↑ %s today", formatBytesLong(state.netTxToday)))
-	menuTempLine.SetTitle(fmt.Sprintf("Temp %.1f°C", state.tempC))
-	menuFanLine.SetTitle(fmt.Sprintf("Fan %d rpm", state.fanRPM))
+	menuTempLine.SetTitle(fmt.Sprintf("🌡  %.1f °C", state.tempC))
+	menuFanLine.SetTitle(fmt.Sprintf("❉  %d rpm", state.fanRPM))
+	menuRxLine.SetTitle(fmt.Sprintf("↓  %s received today", formatBytesLong(state.netRxToday)))
+	menuTxLine.SetTitle(fmt.Sprintf("↑  %s sent today", formatBytesLong(state.netTxToday)))
 	if state.lastErr == "" {
-		menuStatusLine.SetTitle("status: ok")
+		menuStatusLine.SetTitle("●  status: ok")
 	} else {
-		menuStatusLine.SetTitle("status: " + state.lastErr)
+		menuStatusLine.SetTitle("✕  " + state.lastErr)
 	}
 }
 
@@ -235,24 +261,24 @@ func menubarEventLoop() {
 	}
 }
 
-// formatBytesShort is the compact GB-only formatter used in the menubar
-// title (e.g. "3.75"). Matches iStat's display: never longer than 4-5 chars.
-func formatBytesShort(n int64) string {
+// formatTitleBytes is the compact formatter used in the menubar title.
+// Keeps each value to 4-5 characters max so the full title fits in the
+// menubar even when Bartender pushes it left.
+func formatTitleBytes(n int64) string {
 	gb := float64(n) / (1 << 30)
 	switch {
 	case gb >= 100:
-		return fmt.Sprintf("%.0f GB", gb)
+		return fmt.Sprintf("%.0fG", gb)
 	case gb >= 10:
-		return fmt.Sprintf("%.1f GB", gb)
+		return fmt.Sprintf("%.1fG", gb)
 	case gb >= 1:
-		return fmt.Sprintf("%.2f GB", gb)
-	default:
-		mb := float64(n) / (1 << 20)
-		if mb >= 1 {
-			return fmt.Sprintf("%.0f MB", mb)
-		}
-		return "0"
+		return fmt.Sprintf("%.2fG", gb)
 	}
+	mb := float64(n) / (1 << 20)
+	if mb >= 1 {
+		return fmt.Sprintf("%.0fM", mb)
+	}
+	return "0"
 }
 
 // formatBytesLong is the verbose dropdown formatter ("3.75 GB" / "412 MB").
