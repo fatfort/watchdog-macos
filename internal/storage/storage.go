@@ -30,6 +30,10 @@ type SystemSample struct {
 	CompressorPages int64
 	Swapins         int64
 	Swapouts        int64
+	// TempC is the CPU die temperature in Celsius (0 if SMC unreachable).
+	TempC float64
+	// FanRPM is the highest fan speed in RPM (0 on fanless Macs).
+	FanRPM int
 }
 
 type ProcessSample struct {
@@ -140,18 +144,54 @@ func initSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_zone_sample ON zone_samples(sample_id);
 	CREATE INDEX IF NOT EXISTS idx_zone_name ON zone_samples(name);
 	`
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Schema migrations. SQLite has no "ADD COLUMN IF NOT EXISTS", so we run
+	// each ALTER and swallow the "duplicate column name" error that fires on
+	// subsequent boots. New columns: temp_c / fan_rpm (thermal).
+	for _, alter := range []string{
+		`ALTER TABLE system_samples ADD COLUMN temp_c REAL DEFAULT 0`,
+		`ALTER TABLE system_samples ADD COLUMN fan_rpm INTEGER DEFAULT 0`,
+	} {
+		if _, err := db.Exec(alter); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("migrate %q: %w", alter, err)
+		}
+	}
+	return nil
+}
+
+// isDuplicateColumnErr returns true when an ALTER TABLE ADD COLUMN fails
+// because the column already exists — SQLite reports this as a generic
+// error, so we match on the message substring.
+func isDuplicateColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// e.g. "duplicate column name: temp_c"
+	return contains(msg, "duplicate column name")
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) InsertSystemSample(sample SystemSample) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, temp_c, fan_rpm)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sample.Timestamp, sample.Load1, sample.Load5, sample.Load15,
 		sample.Ncpu, sample.MemPressure, sample.SwapUsedGB,
 		sample.Pageins, sample.Pageouts, sample.CompressorPages,
 		sample.Swapins, sample.Swapouts,
+		sample.TempC, sample.FanRPM,
 	)
 	if err != nil {
 		return 0, err

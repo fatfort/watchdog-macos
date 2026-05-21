@@ -43,6 +43,12 @@ func Collect() (*CollectResult, error) {
 		return nil, fmt.Errorf("vmstat: %w", err)
 	}
 
+	// Thermal is best-effort like zones: SMC can return EACCES on some
+	// configurations and we don't want the whole collect to fail because a
+	// fanless Mac has no F0Ac key. Errors are swallowed; zero values flow
+	// through to the dashboard.
+	_ = collectThermal(&result.System)
+
 	procs, err := collectProcesses()
 	if err != nil {
 		return nil, fmt.Errorf("processes: %w", err)
@@ -287,6 +293,19 @@ func collectKernelZones() ([]storage.ZoneSample, error) {
 		zones = zones[:TopZoneCount]
 	}
 	return zones, nil
+}
+
+// collectThermal populates TempC and FanRPM from the SMC via IOKit. The cgo
+// implementation lives in smc_darwin.go; this wrapper exists so the call
+// from Collect() stays symmetric with the other collectors.
+func collectThermal(s *storage.SystemSample) error {
+	temp, fan, err := readSMCThermal()
+	if err != nil {
+		return err
+	}
+	s.TempC = temp
+	s.FanRPM = fan
+	return nil
 }
 
 // parseZprintSize parses zprint's human-readable sizes ("0K", "61K", "365M", "9G")

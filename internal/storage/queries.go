@@ -10,7 +10,8 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
-		        pageins, pageouts, compressor_pages, swapins, swapouts
+		        pageins, pageouts, compressor_pages, swapins, swapouts,
+		        temp_c, fan_rpm
 		 FROM system_samples WHERE timestamp >= ? ORDER BY timestamp ASC`, cutoff,
 	)
 	if err != nil {
@@ -24,7 +25,8 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 		if err := rows.Scan(&s.ID, &s.Timestamp, &s.Load1, &s.Load5, &s.Load15,
 			&s.Ncpu, &s.MemPressure, &s.SwapUsedGB,
 			&s.Pageins, &s.Pageouts, &s.CompressorPages,
-			&s.Swapins, &s.Swapouts); err != nil {
+			&s.Swapins, &s.Swapouts,
+			&s.TempC, &s.FanRPM); err != nil {
 			return nil, err
 		}
 		samples = append(samples, s)
@@ -37,12 +39,14 @@ func (s *Store) GetLatestSample() (*SystemSample, error) {
 	var sample SystemSample
 	err := s.db.QueryRow(
 		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
-		        pageins, pageouts, compressor_pages, swapins, swapouts
+		        pageins, pageouts, compressor_pages, swapins, swapouts,
+		        temp_c, fan_rpm
 		 FROM system_samples ORDER BY id DESC LIMIT 1`,
 	).Scan(&sample.ID, &sample.Timestamp, &sample.Load1, &sample.Load5, &sample.Load15,
 		&sample.Ncpu, &sample.MemPressure, &sample.SwapUsedGB,
 		&sample.Pageins, &sample.Pageouts, &sample.CompressorPages,
-		&sample.Swapins, &sample.Swapouts)
+		&sample.Swapins, &sample.Swapouts,
+		&sample.TempC, &sample.FanRPM)
 	if err != nil {
 		return nil, err
 	}
