@@ -382,6 +382,13 @@ func collectThermal(s *storage.SystemSample) error {
 	return nil
 }
 
+// ReadThermal exposes the SMC reader to other packages (the menubar polls
+// it every 2s without going through storage). Returns the same values
+// collectThermal would write into a SystemSample.
+func ReadThermal() (tempC float64, fanRPM int, err error) {
+	return readSMCThermal()
+}
+
 // parseZprintSize parses zprint's human-readable sizes ("0K", "61K", "365M", "9G")
 // into bytes. Returns 0 for the "----" sentinel zprint uses for unbounded zones.
 func parseZprintSize(s string) int64 {

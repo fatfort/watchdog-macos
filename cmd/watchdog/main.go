@@ -77,6 +77,7 @@ func init() {
 	rootCmd.AddCommand(viewCmd)
 	rootCmd.AddCommand(summaryCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(menubarCmd)
 }
 
 func main() {
