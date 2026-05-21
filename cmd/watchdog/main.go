@@ -15,6 +15,7 @@ import (
 	"github.com/abaj8494/macos-watchdog/internal/launchd"
 	"github.com/abaj8494/macos-watchdog/internal/logs"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
+	"github.com/abaj8494/macos-watchdog/internal/typtel"
 	"github.com/spf13/cobra"
 )
 
@@ -215,6 +216,17 @@ func showSummary() error {
 		}
 	}
 
+	// Optional typing-telemetry section — only renders if the `typtel` CLI
+	// is installed. Any error is silently dropped so missing/broken typtel
+	// can never make `watchdog summary` fail.
+	if t, ok, _ := typtel.Fetch(); ok {
+		fmt.Printf("\n=== Typing today (%s) ===\n", t.Date)
+		fmt.Printf("Keystrokes: %d  Words: %d  Active hours: %d\n",
+			t.Keystrokes, t.Words, t.ActiveHours)
+		fmt.Printf("Mouse:      %d clicks  %.1fm travelled\n",
+			t.MouseClicks, t.MouseDistanceM)
+	}
+
 	return nil
 }
 
@@ -331,6 +343,24 @@ func runServe() error {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		fmt.Fprint(w, out)
+	})
+
+	// /api/typtel surfaces today's typing-telemetry stats when the optional
+	// `typtel` CLI is on PATH. Absent → 404 so a dashboard tab can quietly
+	// hide itself; broken → 502 so the user gets a real signal.
+	http.HandleFunc("/api/typtel", func(w http.ResponseWriter, r *http.Request) {
+		stats, ok, err := typtel.Fetch()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if !ok {
+			http.Error(w, "typtel not installed", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(stats)
 	})
 
 	http.HandleFunc("/api/cron-log", func(w http.ResponseWriter, r *http.Request) {
