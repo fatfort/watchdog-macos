@@ -13,9 +13,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
+
+// commonInstallDirs lists the locations brew / MacPorts / manual installs
+// drop binaries on macOS. We probe these in addition to PATH because the
+// watchdog runs under launchd, whose default PATH is the narrow
+// "/usr/bin:/bin:/usr/sbin:/sbin" — typtel lives at /opt/homebrew/bin on
+// Apple Silicon and won't be found by exec.LookPath without help.
+var commonInstallDirs = []string{
+	"/opt/homebrew/bin",
+	"/usr/local/bin",
+	"/opt/local/bin",
+}
 
 // Stats mirrors the stable JSON schema produced by `typtel today --json`.
 // Keep this struct additive only — fields may be added but never renamed
@@ -39,8 +52,21 @@ type Stats struct {
 const queryTimeout = 3 * time.Second
 
 // lookPath is var-indirected so tests can stub PATH lookups without
-// shelling out. The default uses exec.LookPath.
-var lookPath = exec.LookPath
+// shelling out. The default checks the standard exec.LookPath first
+// and then falls back to a fixed set of macOS install locations so
+// launchd's narrow default PATH doesn't hide typtel from us.
+var lookPath = func(binary string) (string, error) {
+	if p, err := exec.LookPath(binary); err == nil {
+		return p, nil
+	}
+	for _, dir := range commonInstallDirs {
+		candidate := filepath.Join(dir, binary)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
 
 // runCommand is var-indirected so tests can stub the subprocess invocation.
 // In production it execs `typtel today --json` with a timeout.

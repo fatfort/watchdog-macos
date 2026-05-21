@@ -390,6 +390,33 @@ const dashboardTemplate = `<!DOCTYPE html>
             font-size: 0.75em;
             margin-top: 6px;
         }
+        .typing-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .typing-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+        .typing-num {
+            font-size: 1.55em;
+            font-variant-numeric: tabular-nums;
+            color: #c9d1d9;
+            font-weight: 500;
+        }
+        .typing-label {
+            font-size: 0.72em;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-top: 4px;
+        }
+        @media (max-width: 800px) { .typing-cards { grid-template-columns: repeat(2, 1fr); } }
         .tabs {
             display: flex;
             justify-content: center;
@@ -723,6 +750,7 @@ const dashboardTemplate = `<!DOCTYPE html>
         <button onclick="setTab('agents')" id="tab-agents">Agents</button>
         <button onclick="setTab('zones')" id="tab-zones">Zones</button>
         <button onclick="setTab('alerts')" id="tab-alerts">Alerts{{if .AlertsBadge}}<span class="tab-badge {{.AlertsBadge}}" title="Alert fired in the last 24h"></span>{{end}}</button>
+        <button onclick="setTab('typing')" id="tab-typing">Typing</button>
     </div>
 
     <div id="panel-dashboard" class="tab-panel active">
@@ -916,6 +944,32 @@ const dashboardTemplate = `<!DOCTYPE html>
         </div>
     </div>
 
+    <div id="panel-typing" class="tab-panel">
+        <div class="log-toolbar">
+            <button onclick="loadTyping()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="typingStatus"></span>
+        </div>
+        <div class="chart-box">
+            <h2>Typing today <span style="color:#484f58;font-size:0.65em;font-weight:400">via <code>typtel today --json</code></span></h2>
+            <div id="typingEmpty" style="display:none;color:#484f58;padding:18px 4px">
+                typing-telemetry isn't installed. Get it with
+                <code>brew tap abaj8494/typing-telemetry &amp;&amp; brew install --cask typtel</code>.
+            </div>
+            <div id="typingCards" class="typing-cards" style="display:none">
+                <div class="typing-card"><div class="typing-num" id="ty-keystrokes">—</div><div class="typing-label">keystrokes</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-words">—</div><div class="typing-label">words</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-letters">—</div><div class="typing-label">letters</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-modifiers">—</div><div class="typing-label">modifiers</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-special">—</div><div class="typing-label">special</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-clicks">—</div><div class="typing-label">mouse clicks</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-distance">—</div><div class="typing-label">mouse (m)</div></div>
+                <div class="typing-card"><div class="typing-num" id="ty-hours">—</div><div class="typing-label">active hours</div></div>
+            </div>
+            <p class="threshold-note" id="typingDate" style="display:none">Date scope: <span id="ty-date"></span> · pulled on demand, watchdog stores no typing data itself.</p>
+        </div>
+    </div>
+
     <div class="shortcuts-overlay" id="shortcutsOverlay" onclick="toggleShortcuts(false)">
         <div class="shortcuts-card" onclick="event.stopPropagation()">
             <h2>Keyboard Shortcuts</h2>
@@ -926,6 +980,7 @@ const dashboardTemplate = `<!DOCTYPE html>
                 <dt>4</dt><dd>Agents</dd>
                 <dt>5</dt><dd>Zones</dd>
                 <dt>6</dt><dd>Alerts</dd>
+                <dt>7</dt><dd>Typing</dd>
                 <dt>r</dt><dd>Refresh dashboard data</dd>
                 <dt>?</dt><dd>Toggle this help</dd>
                 <dt>Esc</dt><dd>Close this help</dd>
@@ -1166,6 +1221,7 @@ let cronsLoaded = false;
 let agentsLoaded = false;
 let zonesLoaded = false;
 let alertsLoaded = false;
+let typingLoaded = false;
 let selectedCronIdx = -1;
 let cronEntries = [];
 let agentEntries = [];
@@ -1183,6 +1239,7 @@ function setTab(tab) {
     if (tab === 'agents' && !agentsLoaded) loadAgents();
     if (tab === 'zones' && !zonesLoaded) loadZones();
     if (tab === 'alerts' && !alertsLoaded) loadAlerts();
+    if (tab === 'typing' && !typingLoaded) loadTyping();
 }
 
 async function loadSSH() {
@@ -1602,7 +1659,8 @@ const TAB_KEYS = {
     '3': 'crons',
     '4': 'agents',
     '5': 'zones',
-    '6': 'alerts'
+    '6': 'alerts',
+    '7': 'typing'
 };
 
 function toggleShortcuts(force) {
@@ -1623,6 +1681,43 @@ document.addEventListener('keydown', (e) => {
     const tab = TAB_KEYS[e.key];
     if (tab) { e.preventDefault(); setTab(tab); }
 });
+
+async function loadTyping() {
+    const status = document.getElementById('typingStatus');
+    const cards  = document.getElementById('typingCards');
+    const empty  = document.getElementById('typingEmpty');
+    const date   = document.getElementById('typingDate');
+    status.textContent = 'loading…';
+    try {
+        const r = await fetch('/api/typtel');
+        if (r.status === 404) {
+            cards.style.display = 'none';
+            date.style.display  = 'none';
+            empty.style.display = 'block';
+            status.textContent = 'typtel not installed';
+            typingLoaded = true; // remember the absence so we don't refetch on tab toggles
+            return;
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const s = await r.json();
+        empty.style.display = 'none';
+        cards.style.display = 'grid';
+        date.style.display  = 'block';
+        document.getElementById('ty-keystrokes').textContent = (s.keystrokes ?? 0).toLocaleString();
+        document.getElementById('ty-words').textContent      = (s.words      ?? 0).toLocaleString();
+        document.getElementById('ty-letters').textContent    = (s.letters    ?? 0).toLocaleString();
+        document.getElementById('ty-modifiers').textContent  = (s.modifiers  ?? 0).toLocaleString();
+        document.getElementById('ty-special').textContent    = (s.special    ?? 0).toLocaleString();
+        document.getElementById('ty-clicks').textContent     = (s.mouse_clicks ?? 0).toLocaleString();
+        document.getElementById('ty-distance').textContent   = (s.mouse_distance_m ?? 0).toLocaleString(undefined, {maximumFractionDigits: 1});
+        document.getElementById('ty-hours').textContent      = (s.active_hours ?? 0).toLocaleString();
+        document.getElementById('ty-date').textContent       = s.date || 'today';
+        status.textContent = 'ok';
+        typingLoaded = true;
+    } catch (e) {
+        status.textContent = 'error: ' + e.message;
+    }
+}
 
 updateCharts();
 </script>
