@@ -105,13 +105,15 @@ static NSAttributedString *renderCombinedTitle(double size,
                                                 NSString *icon2, NSString *r1r, NSString *r2r) {
     NSFont *font = [NSFont menuBarFontOfSize:size];
 
-    // Tab stops scale with font; tuned empirically against the system
-    // menubar font at 10pt — the icon column gets ~1.7em, the text
-    // column gets ~4.5em, repeat for the second pair.
+    // Tab stops scale with font; the prior "unit * 4.5" gap between
+    // text1 end and icon2 made the two widgets float far apart in the
+    // menubar — visible in the user-supplied screenshot. Tightened to
+    // ~2.5 em so the two widgets read as one compact pill while still
+    // leaving a hair of breathing room between "0rpm" and the globe.
     CGFloat unit = size;
-    CGFloat textCol1 = unit * 1.9;
-    CGFloat iconCol2 = textCol1 + unit * 4.5;
-    CGFloat textCol2 = iconCol2 + unit * 1.9;
+    CGFloat textCol1 = unit * 1.5;
+    CGFloat iconCol2 = textCol1 + unit * 2.5;
+    CGFloat textCol2 = iconCol2 + unit * 1.5;
 
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = NSTextAlignmentLeft;
