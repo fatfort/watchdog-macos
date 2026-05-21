@@ -38,12 +38,13 @@ const (
 	thinSpace = " "
 	// midDot separates logical groups (thermal vs network).
 	midDot = " · "
-	// menubarFontSize: 7pt keeps the 2-row stacked layout inside the
-	// macOS menubar's standard ~22pt height — same vertical footprint
-	// as typtel and other single-line menubar apps. Bigger values
-	// cause macOS to expand the bar, which the user explicitly
-	// pushed back on.
-	menubarFontSize = 7.0
+	// Text font for the menubar values. iStatistica's reference shows the
+	// numbers at roughly half the menubar height per row — 11pt with the
+	// tight line spacing patched into the paragraph style fits cleanly.
+	menubarFontSize = 11.0
+	// SF Symbol point size for the left icon. Slightly larger than the
+	// text so the icon visually dominates the cell the way iStat's does.
+	menubarIconSize = 16.0
 )
 
 var menubarCmd = &cobra.Command{
@@ -93,13 +94,12 @@ var (
 )
 
 func menubarOnReady() {
-	// fyne.io/systray requires *some* icon bytes (NSImage decode panics on
-	// empty), but the visible icon for each widget is the SF Symbol baked
-	// into its attributedTitle — so the primary status item gets a 1×1
-	// transparent stub here.
+	// fyne.io/systray requires *some* initial icon (NSImage decode panics
+	// on an empty buffer); the cgo helper later swaps button.image for
+	// the real SF Symbol once paintTitle runs.
 	icon := transparentIcon()
 	systray.SetTemplateIcon(icon, icon)
-	systray.SetTitle(thinSpace + "…")
+	systray.SetTitle("")
 	systray.SetTooltip("macos-watchdog — live system stats")
 
 	menuTitle = systray.AddMenuItem("macos-watchdog", "")
@@ -129,9 +129,6 @@ func menubarOnReady() {
 
 	menuDashboard = systray.AddMenuItem("Open Dashboard…", "Open http://localhost:9847 in browser")
 	menuQuit = systray.AddMenuItem("Quit", "Stop the menubar app")
-
-	// Configure the cell only — paintTitle supplies the actual content.
-	setMenubarCombined(menubarFontSize, "", "", "", "", "", "")
 
 	go menubarTitleLoop()
 	go menubarSMCLoop()
@@ -167,12 +164,14 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle paints both widgets inside ONE NSStatusItem (one pill) as a
-// 2-row / 4-column layout. Tab stops in the paragraph style line the
-// network arrows under each other in their own column:
+// paintTitle paints two separate NSStatusItems — one for the thermal
+// pair and one for the network pair — matching the iStatistica /
+// iStat Menus layout where each metric group is its own menubar pill
+// with a big SF Symbol icon on the left and two stacked text rows on
+// the right:
 //
-//	[thermometer]  NN°       [globe]  ↓X.XX
-//	               NNNNrpm            ↑Y.YY
+//	[🌡] 49°C   [🌐] ↓41 MB
+//	    0 rpm        ↑28 MB
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -181,19 +180,17 @@ func paintTitle() {
 	tx := state.netTxToday
 	state.mu.RUnlock()
 
-	tempRow1 := fmt.Sprintf("%d°", int(tempC+0.5))
-	tempRow2 := fmt.Sprintf("%drpm", fanRPM)
-	netRow1 := fmt.Sprintf("↓%s", formatTitleBytes(rx))
-	netRow2 := fmt.Sprintf("↑%s", formatTitleBytes(tx))
+	tempRow1 := fmt.Sprintf("%d°C", int(tempC+0.5))
+	tempRow2 := fmt.Sprintf("%d rpm", fanRPM)
+	netRow1 := "↓" + formatTitleBytes(rx)
+	netRow2 := "↑" + formatTitleBytes(tx)
 
-	// Plain-text fallback for fyne's cache; the visible title is the
-	// attributedTitle our cgo helper paints just below.
-	systray.SetTitle(tempRow1 + " " + tempRow2)
+	// Plain-text fallback for fyne's cache; the visible title comes from
+	// the cgo helper's attributedTitle pin below.
+	systray.SetTitle(tempRow1)
 
-	setMenubarCombined(menubarFontSize,
-		"thermometer.medium", tempRow1, tempRow2,
-		"globe", netRow1, netRow2,
-	)
+	setPrimaryWidget(menubarFontSize, menubarIconSize, "thermometer", tempRow1, tempRow2)
+	setSecondaryWidget(menubarFontSize, menubarIconSize, "globe", netRow1, netRow2)
 }
 
 func menubarSMCLoop() {
@@ -294,24 +291,25 @@ func menubarEventLoop() {
 	}
 }
 
-// formatTitleBytes is the compact formatter used in the menubar title.
-// Keeps each value to 4-5 characters max so the full title fits in the
-// menubar even when Bartender pushes it left.
+// formatTitleBytes matches iStatistica's menubar formatting: a space
+// before the unit ("41 MB" / "1.18 GB"), tightening decimals as the
+// value grows. The widget has its own icon column so we can spend a
+// few more characters on the number than the prior compact formatter.
 func formatTitleBytes(n int64) string {
 	gb := float64(n) / (1 << 30)
 	switch {
 	case gb >= 100:
-		return fmt.Sprintf("%.0fG", gb)
+		return fmt.Sprintf("%.0f GB", gb)
 	case gb >= 10:
-		return fmt.Sprintf("%.1fG", gb)
+		return fmt.Sprintf("%.1f GB", gb)
 	case gb >= 1:
-		return fmt.Sprintf("%.2fG", gb)
+		return fmt.Sprintf("%.2f GB", gb)
 	}
 	mb := float64(n) / (1 << 20)
 	if mb >= 1 {
-		return fmt.Sprintf("%.0fM", mb)
+		return fmt.Sprintf("%.0f MB", mb)
 	}
-	return "0"
+	return "0 MB"
 }
 
 // formatBytesLong is the verbose dropdown formatter ("3.75 GB" / "412 MB").

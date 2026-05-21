@@ -9,9 +9,10 @@ package main
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 
-// findOurStatusButton walks NSStatusBar's private _items list (returned
-// as NSConcretePointerArray on modern macOS) and returns the most recent
-// status item's button — that's the one fyne.io/systray created for us.
+// findOurStatusButton walks NSStatusBar's private _items list and
+// returns the most recent status item's button — the one fyne.io/systray
+// created for us. _items is NSConcretePointerArray on modern macOS, so
+// we probe both the NSArray and NSPointerArray APIs.
 static NSStatusBarButton *findOurStatusButton(void) {
     NSStatusBar *bar = [NSStatusBar systemStatusBar];
     id items = [bar valueForKey:@"_items"];
@@ -41,20 +42,13 @@ static void runOnMain(void (^block)(void)) {
     }
 }
 
-// sfSymbolAttachmentChain tries each name in order, returning the first
-// SF Symbol the running OS recognises. Sized for the icon to span two
-// menubar rows (~1.7x the text font), and offset down so the bottom of
-// the glyph drops into the second row's visual area.
-static NSTextAttachment *sfSymbolAttachmentChain(NSArray<NSString *> *names,
-                                                   double textSize) {
+// resolveSymbolImage returns an NSImage for the first SF Symbol name in
+// `names` that the running OS recognises, configured to the given point
+// size and templated for menubar tint. Returns nil if no name matched.
+static NSImage *resolveSymbolImage(NSArray<NSString *> *names, double pointSize) {
     if (@available(macOS 11.0, *)) {
-        // Icon point size tuned so the symbol matches two stacked text
-        // rows in height — at 7pt font + lineSpacing -3 the total row
-        // pair is ~12pt tall, so we want the icon glyph in that
-        // ballpark. 1.6x gives slight overshoot which reads as "spans
-        // both rows" without expanding the menubar height.
         NSImageSymbolConfiguration *cfg =
-            [NSImageSymbolConfiguration configurationWithPointSize:textSize * 1.6
+            [NSImageSymbolConfiguration configurationWithPointSize:pointSize
                                                             weight:NSFontWeightMedium];
         for (NSString *n in names) {
             NSImage *img = [NSImage imageWithSystemSymbolName:n
@@ -62,133 +56,110 @@ static NSTextAttachment *sfSymbolAttachmentChain(NSArray<NSString *> *names,
             if (img == nil) continue;
             img = [img imageWithSymbolConfiguration:cfg];
             img.template = YES; // monochrome, follows menubar tint
-            NSTextAttachment *att = [[NSTextAttachment alloc] init];
-            att.image = img;
-            // Small downward offset so the glyph's vertical centre lands
-            // between the two text rows. Larger offsets pushed the
-            // menubar's total height above the system limit (~22pt).
-            CGFloat h = img.size.height;
-            CGFloat w = img.size.width;
-            att.bounds = NSMakeRect(0, -h * 0.18, w, h);
-            return att;
+            return img;
         }
     }
     return nil;
 }
 
-// sfSymbolAttachment resolves a single canonical name with a fallback
-// chain — SF Symbols are sometimes renamed between releases.
-static NSTextAttachment *sfSymbolAttachment(NSString *name, double size) {
+// symbolImageFor maps a logical name (thermometer, globe) to its SF
+// Symbol fallback chain — SF Symbols are sometimes renamed between OS
+// releases, so we probe multiple candidates and use the first that
+// resolves.
+static NSImage *symbolImageFor(NSString *logicalName, double pointSize) {
     NSArray *chain;
-    if ([name isEqualToString:@"thermometer.medium"]) {
-        chain = @[@"thermometer.medium", @"thermometer", @"thermometer.high",
-                  @"thermometer.snowflake", @"flame.fill"];
-    } else if ([name isEqualToString:@"globe"]) {
-        chain = @[@"globe", @"network", @"antenna.radiowaves.left.and.right"];
+    if ([logicalName isEqualToString:@"thermometer"]) {
+        chain = @[@"thermometer.medium", @"thermometer",
+                  @"thermometer.high", @"thermometer.snowflake",
+                  @"flame.fill"];
+    } else if ([logicalName isEqualToString:@"globe"]) {
+        chain = @[@"globe", @"network",
+                  @"antenna.radiowaves.left.and.right"];
     } else {
-        chain = @[name];
+        chain = @[logicalName];
     }
-    return sfSymbolAttachmentChain(chain, size);
+    return resolveSymbolImage(chain, pointSize);
 }
 
-// renderCombinedTitle builds the 2-row / 4-column attributed string for
-// the single NSStatusItem (one pill, side-by-side widgets):
-//
-//   [icon1] row1l   [icon2] row1r
-//           row2l           row2r
-//
-// Tab stops keep the second column's arrows aligned under each other
-// regardless of row-1 width. Each icon attachment is sized big enough
-// (and offset down) to span the visual height of both rows.
-static NSAttributedString *renderCombinedTitle(double size,
-                                                NSString *icon1, NSString *r1l, NSString *r2l,
-                                                NSString *icon2, NSString *r1r, NSString *r2r) {
+// renderTwoLineTitle builds an NSAttributedString with two stacked
+// lines of text — no icons (those go in button.image). Tight line
+// spacing and a maximum line height keep the rendered block inside the
+// menubar's ~22pt allotment.
+static NSAttributedString *renderTwoLineTitle(NSString *row1, NSString *row2, double size) {
     NSFont *font = [NSFont menuBarFontOfSize:size];
-
-    // Tab stops scale with font; the prior "unit * 4.5" gap between
-    // text1 end and icon2 made the two widgets float far apart in the
-    // menubar — visible in the user-supplied screenshot. Tightened to
-    // ~2.5 em so the two widgets read as one compact pill while still
-    // leaving a hair of breathing room between "0rpm" and the globe.
-    CGFloat unit = size;
-    CGFloat textCol1 = unit * 1.5;
-    CGFloat iconCol2 = textCol1 + unit * 2.5;
-    CGFloat textCol2 = iconCol2 + unit * 1.5;
-
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = NSTextAlignmentLeft;
     para.lineBreakMode = NSLineBreakByClipping;
-    para.lineSpacing = -3.0;             // tight enough to fit menubar height
-    para.paragraphSpacingBefore = 0;
-    para.maximumLineHeight = size + 2;   // hard ceiling so we never push the bar taller
-    para.tabStops = @[
-        [[NSTextTab alloc] initWithType:NSLeftTabStopType location:textCol1],
-        [[NSTextTab alloc] initWithType:NSLeftTabStopType location:iconCol2],
-        [[NSTextTab alloc] initWithType:NSLeftTabStopType location:textCol2],
-    ];
-    para.defaultTabInterval = textCol2 + unit * 4;
-
+    para.lineSpacing = -3.0;
+    para.maximumLineHeight = size + 2.0;
     NSDictionary *attrs = @{
         NSFontAttributeName: font,
         NSParagraphStyleAttributeName: para,
     };
-    NSAttributedString *(^t)(NSString *) = ^(NSString *s) {
-        return [[NSAttributedString alloc] initWithString:s attributes:attrs];
-    };
-
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
-
-    // Row 1: [icon1]\trow1l\t[icon2]\trow1r
-    if (icon1.length > 0) {
-        NSTextAttachment *a = sfSymbolAttachment(icon1, size);
-        if (a) [out appendAttributedString:
-            [NSAttributedString attributedStringWithAttachment:a]];
-    }
-    [out appendAttributedString:t(@"\t")];
-    [out appendAttributedString:t(r1l ?: @"")];
-    [out appendAttributedString:t(@"\t")];
-    if (icon2.length > 0) {
-        NSTextAttachment *a = sfSymbolAttachment(icon2, size);
-        if (a) [out appendAttributedString:
-            [NSAttributedString attributedStringWithAttachment:a]];
-    }
-    [out appendAttributedString:t(@"\t")];
-    [out appendAttributedString:t(r1r ?: @"")];
-
-    // Row 2: \trow2l\t\trow2r — icon column empty, text columns at the
-    // same tab stops so digits and arrows align under their row-1
-    // counterparts.
-    [out appendAttributedString:t(@"\n\t")];
-    [out appendAttributedString:t(r2l ?: @"")];
-    [out appendAttributedString:t(@"\t\t")];
-    [out appendAttributedString:t(r2r ?: @"")];
-
+    [out appendAttributedString:[[NSAttributedString alloc] initWithString:(row1 ?: @"")
+                                                                attributes:attrs]];
+    [out appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"
+                                                                attributes:attrs]];
+    [out appendAttributedString:[[NSAttributedString alloc] initWithString:(row2 ?: @"")
+                                                                attributes:attrs]];
     [out addAttribute:NSParagraphStyleAttributeName
                 value:para
                 range:NSMakeRange(0, out.length)];
     return out;
 }
 
-// patchMenubarCombined paints the fyne-owned status item with the
-// 2x2 combined widget on the main thread.
-static void patchMenubarCombined(double size,
-                                  const char *icon1, const char *row1l, const char *row2l,
-                                  const char *icon2, const char *row1r, const char *row2r) {
-    NSString *i1  = icon1 ? [NSString stringWithUTF8String:icon1] : @"";
-    NSString *r1l = row1l ? [NSString stringWithUTF8String:row1l] : @"";
-    NSString *r2l = row2l ? [NSString stringWithUTF8String:row2l] : @"";
-    NSString *i2  = icon2 ? [NSString stringWithUTF8String:icon2] : @"";
-    NSString *r1r = row1r ? [NSString stringWithUTF8String:row1r] : @"";
-    NSString *r2r = row2r ? [NSString stringWithUTF8String:row2r] : @"";
+// patchPrimaryWidget paints the fyne-owned status item as the thermal
+// widget: SF Symbol image to the left, two-line text to the right.
+static void patchPrimaryWidget(double textSize, double iconSize,
+                                const char *symbolName,
+                                const char *row1, const char *row2) {
+    NSString *sym = symbolName ? [NSString stringWithUTF8String:symbolName] : @"";
+    NSString *r1  = row1 ? [NSString stringWithUTF8String:row1] : @"";
+    NSString *r2  = row2 ? [NSString stringWithUTF8String:row2] : @"";
     runOnMain(^{
         @autoreleasepool {
             NSStatusBarButton *button = findOurStatusButton();
             if (button == nil) return;
-            NSFont *font = [NSFont menuBarFontOfSize:size];
-            button.font = font;
+            NSImage *img = symbolImageFor(sym, iconSize);
+            if (img != nil) button.image = img;
+            button.imagePosition = NSImageLeading;
+            button.imageHugsTitle = YES;
             button.cell.usesSingleLineMode = NO;
             button.cell.lineBreakMode = NSLineBreakByClipping;
-            button.attributedTitle = renderCombinedTitle(size, i1, r1l, r2l, i2, r1r, r2r);
+            button.attributedTitle = renderTwoLineTitle(r1, r2, textSize);
+        }
+    });
+}
+
+// Secondary NSStatusItem held across collect ticks so updates don't leak
+// new status items. Created lazily on first patchSecondaryWidget call.
+static NSStatusItem *gSecondaryItem = nil;
+
+// patchSecondaryWidget creates (if needed) and updates a second
+// NSStatusItem placed next to the primary — the network widget,
+// mirroring how iStat / iStatistica split temperature and network into
+// independent menubar items.
+static void patchSecondaryWidget(double textSize, double iconSize,
+                                  const char *symbolName,
+                                  const char *row1, const char *row2) {
+    NSString *sym = symbolName ? [NSString stringWithUTF8String:symbolName] : @"";
+    NSString *r1  = row1 ? [NSString stringWithUTF8String:row1] : @"";
+    NSString *r2  = row2 ? [NSString stringWithUTF8String:row2] : @"";
+    runOnMain(^{
+        @autoreleasepool {
+            if (gSecondaryItem == nil) {
+                NSStatusBar *bar = [NSStatusBar systemStatusBar];
+                gSecondaryItem = [bar statusItemWithLength:NSVariableStatusItemLength];
+                CFRetain((__bridge CFTypeRef)gSecondaryItem);
+                gSecondaryItem.button.cell.usesSingleLineMode = NO;
+                gSecondaryItem.button.cell.lineBreakMode = NSLineBreakByClipping;
+                gSecondaryItem.button.imagePosition = NSImageLeading;
+                gSecondaryItem.button.imageHugsTitle = YES;
+            }
+            NSImage *img = symbolImageFor(sym, iconSize);
+            if (img != nil) gSecondaryItem.button.image = img;
+            gSecondaryItem.button.attributedTitle = renderTwoLineTitle(r1, r2, textSize);
         }
     });
 }
@@ -196,23 +167,27 @@ static void patchMenubarCombined(double size,
 import "C"
 import "unsafe"
 
-// setMenubarCombined paints the fyne-owned status item as a 2-row /
-// 4-column widget: [icon1] row1l  [icon2] row1r above row2l / row2r,
-// arrows aligned to the second-column tab stop.
-func setMenubarCombined(size float64,
-	icon1, row1l, row2l, icon2, row1r, row2r string,
-) {
-	ci1 := C.CString(icon1)
-	defer C.free(unsafe.Pointer(ci1))
-	cr1l := C.CString(row1l)
-	defer C.free(unsafe.Pointer(cr1l))
-	cr2l := C.CString(row2l)
-	defer C.free(unsafe.Pointer(cr2l))
-	ci2 := C.CString(icon2)
-	defer C.free(unsafe.Pointer(ci2))
-	cr1r := C.CString(row1r)
-	defer C.free(unsafe.Pointer(cr1r))
-	cr2r := C.CString(row2r)
-	defer C.free(unsafe.Pointer(cr2r))
-	C.patchMenubarCombined(C.double(size), ci1, cr1l, cr2l, ci2, cr1r, cr2r)
+// setPrimaryWidget paints the fyne-owned status item with a left-icon +
+// two-row-text layout: thermal widget.
+func setPrimaryWidget(textSize, iconSize float64, symbol, row1, row2 string) {
+	cs := C.CString(symbol)
+	defer C.free(unsafe.Pointer(cs))
+	cr1 := C.CString(row1)
+	defer C.free(unsafe.Pointer(cr1))
+	cr2 := C.CString(row2)
+	defer C.free(unsafe.Pointer(cr2))
+	C.patchPrimaryWidget(C.double(textSize), C.double(iconSize), cs, cr1, cr2)
+}
+
+// setSecondaryWidget creates (lazily) and updates a second status item
+// for the network widget — together with the primary widget they
+// reproduce the iStat side-by-side layout.
+func setSecondaryWidget(textSize, iconSize float64, symbol, row1, row2 string) {
+	cs := C.CString(symbol)
+	defer C.free(unsafe.Pointer(cs))
+	cr1 := C.CString(row1)
+	defer C.free(unsafe.Pointer(cr1))
+	cr2 := C.CString(row2)
+	defer C.free(unsafe.Pointer(cr2))
+	C.patchSecondaryWidget(C.double(textSize), C.double(iconSize), cs, cr1, cr2)
 }

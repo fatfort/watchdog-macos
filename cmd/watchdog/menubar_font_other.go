@@ -2,6 +2,7 @@
 
 package main
 
-// setMenubarCombined is a no-op everywhere except darwin + cgo.
-func setMenubarCombined(size float64, icon1, row1l, row2l, icon2, row1r, row2r string) {
-}
+// setPrimaryWidget / setSecondaryWidget are no-ops everywhere except
+// darwin + cgo.
+func setPrimaryWidget(textSize, iconSize float64, symbol, row1, row2 string)   {}
+func setSecondaryWidget(textSize, iconSize float64, symbol, row1, row2 string) {}
