@@ -142,9 +142,9 @@ func menubarOnReady() {
 
 	// Shrink the NSStatusBarButton font so two stacked lines fit inside the
 	// menubar's fixed height. fyne.io/systray's default ~14pt overflows; ~9pt
-	// gives us a tight but readable two-row layout, mirroring the iStat /
-	// MenuMeters look.
-	setMenubarFontSize(9)
+	// gives us a tight but readable two-row layout. Empty title means
+	// "configure the cell only — paintTitle will supply the actual text".
+	setMenubarFontSize(9, "")
 
 	go menubarTitleLoop()
 	go menubarSMCLoop()
@@ -197,7 +197,12 @@ func paintTitle() {
 
 	thermal := fmt.Sprintf("%d° %drpm", int(tempC+0.5), fanRPM)
 	net := fmt.Sprintf("↓%s ↑%s", formatTitleBytes(rx), formatTitleBytes(tx))
-	systray.SetTitle(thermal + "\n" + net)
+	title := thermal + "\n" + net
+	// systray.SetTitle goes through NSButton.title which strips newlines.
+	// Route the actual paint through our cgo helper that sets attributedTitle
+	// with a paragraph style that respects \n.
+	systray.SetTitle(title) // keeps fyne's internal cache in sync
+	setMenubarFontSize(9, title)
 }
 
 func menubarSMCLoop() {

@@ -10,43 +10,63 @@ package main
 #import <Foundation/Foundation.h>
 
 // patchMenubarFont reaches into NSStatusBar to find the status item that
-// fyne.io/systray just created and tightens its button so two text lines
-// fit inside the fixed menubar height:
+// fyne.io/systray just created and:
 //
-//   button.font            = system menubar font at `size` pt (~half default)
-//   cell.usesSingleLineMode = NO   (otherwise newlines truncate)
-//   cell.lineBreakMode      = clip (avoid mid-word wrap weirdness)
-//   button.imagePosition    = left of text so the chart-bars icon and the
-//                             two-line title don't fight for the same slot
+//  1. Shrinks the button font (size pt) so two stacked lines fit.
+//  2. Builds an NSAttributedString with paragraph style allowing newlines,
+//     and pins it via setAttributedTitle: — the plain title setter strips
+//     newlines unless line-break mode is set on the cell *and* the title
+//     is attributed.
 //
-// Uses the private `_items` ivar on NSStatusBar — stable since 10.6, used
-// by every status-item theming tool (Bartender, iStat Menus, etc.). The
-// alternative is forking fyne.io/systray to expose attributedTitle and
-// that's a much larger change for the same outcome.
-static void patchMenubarFont(double size) {
+// imagePosition is deliberately untouched: setting it to NSImageLeft when
+// the title is multi-line shifted the icon out of the button's drawing
+// rect on macOS Sequoia, making it disappear. fyne.io/systray's default
+// (NSImageOnly upgraded to NSImageLeading once a title is set) is what we
+// want.
+//
+// Uses NSStatusBar's private `_items` ivar — stable since 10.6 and the
+// same path Bartender / iStat Menus / every status-item theming app uses.
+static void patchMenubarFont(double size, const char *text) {
     @autoreleasepool {
         NSStatusBar *bar = [NSStatusBar systemStatusBar];
         NSArray *items = [bar valueForKey:@"_items"];
         if (items.count == 0) return;
-        // We're the only consumer of fyne's status item in this process, so
-        // the most recently added item is ours.
         NSStatusItem *item = items.lastObject;
         NSStatusBarButton *button = item.button;
         if (button == nil) return;
-        button.font = [NSFont menuBarFontOfSize:size];
+
+        NSFont *font = [NSFont menuBarFontOfSize:size];
+        button.font = font;
         button.cell.usesSingleLineMode = NO;
         button.cell.lineBreakMode = NSLineBreakByClipping;
-        button.imagePosition = NSImageLeft;
-        // Two-line titles default to vertically-centred; nudge slightly
-        // tighter so the menubar doesn't look like it's been stretched.
-        if ([button respondsToSelector:@selector(setImageHugsTitle:)]) {
-            [button setImageHugsTitle:YES];
+
+        if (text != NULL && text[0] != '\0') {
+            NSString *s = [NSString stringWithUTF8String:text];
+            NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+            para.alignment = NSTextAlignmentLeft;
+            para.lineBreakMode = NSLineBreakByClipping;
+            para.lineSpacing = -2; // pull the two rows tight
+            NSDictionary *attrs = @{
+                NSFontAttributeName: font,
+                NSParagraphStyleAttributeName: para,
+            };
+            NSAttributedString *attr =
+                [[NSAttributedString alloc] initWithString:s attributes:attrs];
+            button.attributedTitle = attr;
         }
     }
 }
 */
 import "C"
+import "unsafe"
 
-func setMenubarFontSize(size float64) {
-	C.patchMenubarFont(C.double(size))
+// setMenubarFontSize patches the status-item button to use a smaller font
+// and multi-line layout. Pass an empty `title` on first call (to apply
+// font + cell settings only); pass the live title on subsequent calls
+// from paintTitle to refresh the attributed string and keep the
+// two-line layout consistent across updates.
+func setMenubarFontSize(size float64, title string) {
+	cText := C.CString(title)
+	defer C.free(unsafe.Pointer(cText))
+	C.patchMenubarFont(C.double(size), cText)
 }
