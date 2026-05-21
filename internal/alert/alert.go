@@ -33,6 +33,27 @@ const (
 	zoneCooldown           = 30 * time.Minute
 	zoneRunawayMaxPerCycle = 5 // cap fan-out per Evaluate() so we don't mailbomb
 
+	// Load-spike — a sudden CPU load ≥ 8 caught the 14.73 spike from the
+	// 2026-05-21 hang. Single-sample because thrash spikes can be brief
+	// before the system locks up; the cool-down stops repeat-firing.
+	loadSpikeThreshold = 8.0
+	loadSpikeCooldown  = 30 * time.Minute
+
+	// Compressor-pressure — high compressor + active swap together is the
+	// real precursor to a thrash hang on Apple Silicon. The DB at the time
+	// of the hang showed ~1M compressor pages with 2.5 GB swap for 30+ min
+	// before the system stalled; this rule would have fired well in advance.
+	compressorPagesThreshold  = 800_000
+	compressorSwapThresholdGB = 1.0
+	compressorSustainSamples  = 2
+	compressorCooldown        = 60 * time.Minute
+
+	// Temp-sustained — Apple Silicon throttles around 95-100 °C; sustained
+	// 75 °C means the SoC is running hot enough to be worth knowing about.
+	tempThreshold      = 75.0
+	tempSustainSamples = 2
+	tempCooldown       = 60 * time.Minute
+
 	msmtpBin     = "/opt/local/bin/msmtp"
 	msmtpAccount = "gmail"
 	recipient    = "aayushbajaj7@gmail.com"
@@ -62,7 +83,73 @@ func Evaluate(store *storage.Store, samples []storage.SystemSample, procs []stor
 			fired = append(fired, a)
 		}
 	}
+	if a, ok := evalLoadSpike(samples, procs, zones); ok && shouldFire(store, a.Kind, loadSpikeCooldown) {
+		fired = append(fired, a)
+	}
+	if a, ok := evalCompressorPressure(samples, procs, zones); ok && shouldFire(store, a.Kind, compressorCooldown) {
+		fired = append(fired, a)
+	}
+	if a, ok := evalTempSustained(samples, procs, zones); ok && shouldFire(store, a.Kind, tempCooldown) {
+		fired = append(fired, a)
+	}
 	return fired
+}
+
+func evalLoadSpike(samples []storage.SystemSample, procs []storage.ProcessSample, zones []storage.ZoneSample) (Alert, bool) {
+	if len(samples) == 0 {
+		return Alert{}, false
+	}
+	latest := samples[len(samples)-1]
+	if latest.Load1 < loadSpikeThreshold {
+		return Alert{}, false
+	}
+	return Alert{
+		Kind:    "load-spike",
+		Value:   latest.Load1,
+		Subject: fmt.Sprintf("[watchdog] load %.1f — thrash precursor", latest.Load1),
+		Body:    buildBody(fmt.Sprintf("Load average crossed %.1f — system may be about to thrash.", loadSpikeThreshold), latest, procs, zones),
+	}, true
+}
+
+func evalCompressorPressure(samples []storage.SystemSample, procs []storage.ProcessSample, zones []storage.ZoneSample) (Alert, bool) {
+	if len(samples) < compressorSustainSamples {
+		return Alert{}, false
+	}
+	tail := samples[len(samples)-compressorSustainSamples:]
+	for _, s := range tail {
+		if s.CompressorPages < compressorPagesThreshold {
+			return Alert{}, false
+		}
+		if s.SwapUsedGB < compressorSwapThresholdGB {
+			return Alert{}, false
+		}
+	}
+	latest := samples[len(samples)-1]
+	return Alert{
+		Kind:    "compressor-pressure",
+		Value:   float64(latest.CompressorPages),
+		Subject: fmt.Sprintf("[watchdog] compressor %dk pages + swap %.1f GB", latest.CompressorPages/1000, latest.SwapUsedGB),
+		Body:    buildBody("Compressor and swap both sustained — the precursor pattern to the 2026-05-21 thrash hang.", latest, procs, zones),
+	}, true
+}
+
+func evalTempSustained(samples []storage.SystemSample, procs []storage.ProcessSample, zones []storage.ZoneSample) (Alert, bool) {
+	if len(samples) < tempSustainSamples {
+		return Alert{}, false
+	}
+	tail := samples[len(samples)-tempSustainSamples:]
+	for _, s := range tail {
+		if s.TempC < tempThreshold {
+			return Alert{}, false
+		}
+	}
+	latest := samples[len(samples)-1]
+	return Alert{
+		Kind:    "temp-sustained",
+		Value:   latest.TempC,
+		Subject: fmt.Sprintf("[watchdog] CPU %.0f °C sustained", latest.TempC),
+		Body:    buildBody(fmt.Sprintf("CPU temperature has been ≥ %.0f °C for at least two samples.", tempThreshold), latest, procs, zones),
+	}, true
 }
 
 func shouldFire(store *storage.Store, kind string, cooldown time.Duration) bool {
@@ -240,10 +327,74 @@ func fmtBytes(n int64) string {
 	return fmt.Sprintf("%d B", n)
 }
 
-// Send hands the alert to msmtp on stdin. Uses an absolute path because
+// Send routes the alert to whichever surface the user is most likely to
+// see RIGHT NOW. When the display is on, a macOS notification banner is
+// cheaper to act on than an email — the user is at the desk. When the
+// display is asleep, the user isn't watching the menubar, so we fall
+// back to msmtp so the alert sits in their inbox for the next time they
+// check. The two paths share the same Alert subject + body.
+func Send(a Alert) error {
+	if displayIsAwake() {
+		return sendNotification(a)
+	}
+	return sendEmail(a)
+}
+
+// displayIsAwake checks the current power state of the main display.
+// `pmset -g powerstate IODisplayWrangler` returns the IOKit power state
+// of the display wrangler — 4 = on, 0..3 = various sleep / dimming
+// states. Defaults to "awake" on parse failure so we don't silently
+// drop alerts into the email void when the user is probably looking
+// at the menubar.
+func displayIsAwake() bool {
+	out, err := exec.Command("/usr/bin/pmset", "-g", "powerstate", "IODisplayWrangler").Output()
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "Current Power State:") {
+			f := strings.Fields(line)
+			if len(f) >= 4 && f[len(f)-1] == "4" {
+				return true
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// sendNotification fires a native macOS notification via osascript. The
+// banner only carries the subject + a one-line summary — the full alert
+// body still lands in the email path when the screen sleeps, so we
+// don't try to cram everything into the banner.
+func sendNotification(a Alert) error {
+	headline := a.Subject
+	summary := ""
+	for _, l := range strings.SplitN(a.Body, "\n", 2) {
+		summary = strings.TrimSpace(l)
+		break
+	}
+	if len(summary) > 200 {
+		summary = summary[:197] + "…"
+	}
+	headline = strings.ReplaceAll(headline, `"`, `\"`)
+	summary = strings.ReplaceAll(summary, `"`, `\"`)
+	script := fmt.Sprintf(
+		`display notification "%s" with title "%s" subtitle "macos-watchdog"`,
+		summary, headline,
+	)
+	cmd := exec.Command("/usr/bin/osascript", "-e", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("osascript: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// sendEmail hands the alert to msmtp on stdin. Uses an absolute path because
 // launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin) doesn't include
 // MacPorts — same gotcha the rmsync sender works around.
-func Send(a Alert) error {
+func sendEmail(a Alert) error {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "From: %s\r\n", sender)
 	fmt.Fprintf(&buf, "To: %s\r\n", recipient)
