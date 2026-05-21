@@ -15,6 +15,7 @@ import (
 	"github.com/abaj8494/macos-watchdog/internal/launchd"
 	"github.com/abaj8494/macos-watchdog/internal/logs"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
+	"github.com/abaj8494/macos-watchdog/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -69,6 +70,14 @@ var summaryCmd = &cobra.Command{
 	},
 }
 
+var topCmd = &cobra.Command{
+	Use:   "top",
+	Short: "Interactive TUI dashboard (refreshes every 2s)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return tui.Run()
+	},
+}
+
 func init() {
 	summaryCmd.Flags().IntVarP(&summaryHours, "hours", "H", 4, "Lookback window in hours")
 	rootCmd.Flags().IntVarP(&summaryHours, "hours", "H", 4, "Lookback window in hours")
@@ -77,6 +86,7 @@ func init() {
 	rootCmd.AddCommand(viewCmd)
 	rootCmd.AddCommand(summaryCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(topCmd)
 }
 
 func main() {
