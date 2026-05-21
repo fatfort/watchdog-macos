@@ -75,20 +75,25 @@ func collectLoadAvg(s *storage.SystemSample) error {
 	if err != nil {
 		return err
 	}
-	out = strings.Trim(out, "{ }")
-	fields := strings.Fields(out)
-	if len(fields) < 3 {
-		return fmt.Errorf("unexpected loadavg format: %q", out)
-	}
-	s.Load1, _ = strconv.ParseFloat(fields[0], 64)
-	s.Load5, _ = strconv.ParseFloat(fields[1], 64)
-	s.Load15, _ = strconv.ParseFloat(fields[2], 64)
-
 	ncpuStr, err := run("/usr/sbin/sysctl", "-n", "hw.ncpu")
 	if err != nil {
 		return err
 	}
-	s.Ncpu, _ = strconv.Atoi(ncpuStr)
+	return parseLoadAvg(out, ncpuStr, s)
+}
+
+// parseLoadAvg parses sysctl vm.loadavg output ("{ 1.23 2.34 3.45 }") and
+// the bare hw.ncpu integer into the sample.
+func parseLoadAvg(loadavg, ncpu string, s *storage.SystemSample) error {
+	trimmed := strings.Trim(loadavg, "{ }")
+	fields := strings.Fields(trimmed)
+	if len(fields) < 3 {
+		return fmt.Errorf("unexpected loadavg format: %q", loadavg)
+	}
+	s.Load1, _ = strconv.ParseFloat(fields[0], 64)
+	s.Load5, _ = strconv.ParseFloat(fields[1], 64)
+	s.Load15, _ = strconv.ParseFloat(fields[2], 64)
+	s.Ncpu, _ = strconv.Atoi(strings.TrimSpace(ncpu))
 	return nil
 }
 
@@ -108,6 +113,12 @@ func collectSwap(s *storage.SystemSample) error {
 	if err != nil {
 		return err
 	}
+	return parseSwap(out, s)
+}
+
+// parseSwap extracts the "used = X.YZM" (or "G") field from sysctl
+// vm.swapusage output and stores it as gigabytes.
+func parseSwap(out string, s *storage.SystemSample) error {
 	for _, part := range strings.Split(out, " ") {
 		if strings.HasSuffix(part, "M") && strings.Contains(out[:strings.Index(out, part)], "used") {
 			val := strings.TrimSuffix(part, "M")
@@ -140,6 +151,12 @@ func collectVMStat(s *storage.SystemSample) error {
 	if err != nil {
 		return err
 	}
+	return parseVMStat(out, s)
+}
+
+// parseVMStat pulls the five fields we care about out of vm_stat output.
+// Each value line ends with a trailing "." which is trimmed before parsing.
+func parseVMStat(out string, s *storage.SystemSample) error {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		parts := strings.Fields(line)
@@ -178,7 +195,12 @@ func collectProcesses() ([]storage.ProcessSample, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseProcesses(out), nil
+}
 
+// parseProcesses parses `ps -eo pid,rss,%cpu,comm -m` output, sorts by RSS,
+// and returns the top TopProcessCount samples.
+func parseProcesses(out string) []storage.ProcessSample {
 	var procs []procInfo
 	lines := strings.Split(out, "\n")
 	for i, line := range lines {
@@ -221,7 +243,7 @@ func collectProcesses() ([]storage.ProcessSample, error) {
 			CPUPct: p.CPUPct,
 		})
 	}
-	return samples, nil
+	return samples
 }
 
 // collectKernelZones samples kernel zone occupancy via `zprint`. Tries sudo
@@ -243,7 +265,14 @@ func collectKernelZones() ([]storage.ZoneSample, error) {
 			return nil, err
 		}
 	}
+	return parseKernelZones(out), nil
+}
 
+// parseKernelZones parses `zprint -L` output: it skips the two header lines
+// + the dashed-rule, decodes each data row into a ZoneSample (preferring the
+// kernel-reported cur_size over elem*inuse), then sorts and trims to
+// TopZoneCount.
+func parseKernelZones(out string) []storage.ZoneSample {
 	var zones []storage.ZoneSample
 	inData := false
 	for _, line := range strings.Split(out, "\n") {
@@ -286,7 +315,7 @@ func collectKernelZones() ([]storage.ZoneSample, error) {
 	if len(zones) > TopZoneCount {
 		zones = zones[:TopZoneCount]
 	}
-	return zones, nil
+	return zones
 }
 
 // parseZprintSize parses zprint's human-readable sizes ("0K", "61K", "365M", "9G")

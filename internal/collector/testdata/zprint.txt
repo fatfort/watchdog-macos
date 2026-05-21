@@ -1,0 +1,30 @@
+                            elem         cur         max        cur         max         cur  alloc  alloc
+zone name                   size        size        size      #elts       #elts       inuse   size  count
+-------------------------------------------------------------------------------------------------------------
+vm.permanent                   1          0K          0K          0           0      162900     0K      0
+vm.permanent.percpu           10          0K          0K          0           0       29172     0K      0
+threads_ro                    96          0K          0K          0           0        4852     0K      0
+MAC.Labels                    64          0K          0K          0           0       25728     0K      0
+proc_ro                      144          0K          0K          0           0        1089     0K      0
+cred                         144          0K          0K          0           0        2140     0K      0
+data_shakalloc.1024         1024          9G          9G    9437184    10000000     9437184     4K   1024
+data.kalloc.16                16        160K        256K          0           0      108105     0K      0
+VM.map.entries                80          0K          0K          0           0      496970     0K      0
+vm.pages.array                48          0K          0K          0           0     1494087     0K      0 X
+ipc.ports                    144          0K          0K          0           0       76384     0K      0
+mbuf                         512          0K          0K          0           0         770     0K      0 X
+data.mbuf.cluster.2k        2048          0K          0K          0           0         359     0K      0 X
+data.mbuf.cluster.4k        4096       ----        ----            0           0         175     0K      0 X
+data.mbuf.cluster.16k      16384         32M         64M           0           0         190     0K      0 X
+mbuf.composite.2k           2592          0K          0K          0           0         187     0K      0
+vm.objects                   256          0K          0K          0           0      121750     0K      0
+zcc_magazine_zone            128          0K          0K          0           0       23870     0K      0
+data.kalloc.32                32          0K          0K          0           0          31     0K      0
+data.kalloc.48                48          0K          0K          0           0          72     0K      0
+data.kalloc.64                64          0K          0K          0           0           5     0K      0
+data.kalloc.96                96          0K          0K          0           0        4638     0K      0
+data.kalloc.128              128          0K          0K          0           0       12699     0K      0
+data.kalloc.192              192          0K          0K          0           0          80     0K      0
+data.kalloc.256              256          0K          0K          0           0          36     0K      0
+data.kalloc.384              384          0K          0K          0           0         117     0K      0
+data.kalloc.512              512          0K          0K          0           0          48     0K      0

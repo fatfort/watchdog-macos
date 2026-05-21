@@ -1,0 +1,21 @@
+  PID    RSS  %CPU COMM
+23521 566272   0.2 claude
+12762 551248  11.4 claude
+ 2289 482576   0.2 claude
+95019 467088   0.1 /Applications/Arc.app/Contents/MacOS/Arc
+23935 451488  10.9 claude
+17302 422912   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+28005 396432   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+92367 386528   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+  558 379008   0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+46861 345888   0.0 /Applications/MacPorts/Emacs.app/Contents/MacOS/Emacs
+  414 303424  12.6 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+94542 273248   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+ 1982 255712   0.0 /Applications/Spotify.app/Contents/Frameworks/Spotify Helper (Renderer).app/Contents/MacOS/Spotify Helper (Renderer)
+  705 232512   0.0 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  972 223456   0.0 /Applications/Spotify.app/Contents/MacOS/Spotify
+83113 219280   0.0 gopls
+92980 193024   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+95849 191280   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+81114 179376   0.0 /Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/Browser Helper (Renderer).app/Contents/MacOS/Browser Helper (Renderer)
+  718 178800   0.3 /Applications/reMarkable.app/Contents/MacOS/reMarkable
