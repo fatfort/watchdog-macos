@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -206,6 +207,87 @@ func (s *Store) GetZoneTable(hours int, limit int) ([]ZoneTableRow, error) {
 		table = append(table, r)
 	}
 	return table, rows.Err()
+}
+
+// ZoneGrowth pairs a zone's current sample with its nearest at-or-before
+// sample from `window` ago. HasPrior is false when no sample exists at or
+// before the cutoff (zone is newer than the window, or DB is too young).
+// Used by the alerter to detect the runaway-zone pattern that caused the
+// 9 GB data_shakalloc.1024 watchdog panic.
+type ZoneGrowth struct {
+	Name       string
+	ElemSize   int64
+	InUse      int64
+	CurrBytes  int64
+	CurrTime   string
+	PriorBytes int64
+	PriorTime  string
+	HasPrior   bool
+}
+
+// GetZonesWithGrowth returns, for every zone present in the most recent
+// system sample, its current est_bytes/elem_size/in_use plus the est_bytes
+// of the nearest zone_sample whose system_sample.timestamp is at-or-before
+// (now - window). One query, not N round-trips — the alerter calls this
+// every collect cycle.
+func (s *Store) GetZonesWithGrowth(window time.Duration) ([]ZoneGrowth, error) {
+	cutoff := time.Now().Add(-window).Format(time.RFC3339)
+
+	// Resolve the latest system sample (the "current" snapshot).
+	var latestID int64
+	var latestTS string
+	err := s.db.QueryRow(
+		`SELECT id, timestamp FROM system_samples ORDER BY id DESC LIMIT 1`,
+	).Scan(&latestID, &latestTS)
+	if err != nil {
+		return nil, fmt.Errorf("get latest sample for zone growth: %w", err)
+	}
+
+	// For each zone in the latest sample, look up the nearest at-or-before
+	// est_bytes via a correlated subquery. The subquery returns NULL when no
+	// prior sample exists for that zone (DB younger than window, or zone
+	// brand new).
+	rows, err := s.db.Query(
+		`SELECT zs.name, zs.elem_size, zs.in_use, zs.est_bytes,
+		        (SELECT zs2.est_bytes
+		         FROM zone_samples zs2
+		         JOIN system_samples ss2 ON zs2.sample_id = ss2.id
+		         WHERE zs2.name = zs.name AND ss2.timestamp <= ?
+		         ORDER BY ss2.timestamp DESC
+		         LIMIT 1) AS prior_bytes,
+		        (SELECT ss2.timestamp
+		         FROM zone_samples zs2
+		         JOIN system_samples ss2 ON zs2.sample_id = ss2.id
+		         WHERE zs2.name = zs.name AND ss2.timestamp <= ?
+		         ORDER BY ss2.timestamp DESC
+		         LIMIT 1) AS prior_ts
+		 FROM zone_samples zs
+		 WHERE zs.sample_id = ?`, cutoff, cutoff, latestID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query zone growth: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ZoneGrowth
+	for rows.Next() {
+		var g ZoneGrowth
+		var priorBytes sql.NullInt64
+		var priorTS sql.NullString
+		if err := rows.Scan(&g.Name, &g.ElemSize, &g.InUse, &g.CurrBytes, &priorBytes, &priorTS); err != nil {
+			return nil, err
+		}
+		g.CurrTime = latestTS
+		if priorBytes.Valid {
+			g.PriorBytes = priorBytes.Int64
+			g.HasPrior = true
+		}
+		if priorTS.Valid {
+			g.PriorTime = priorTS.String
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }
 
 // SummaryStats holds aggregate stats for the CLI summary.
