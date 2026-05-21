@@ -34,6 +34,12 @@ type SystemSample struct {
 	TempC float64
 	// FanRPM is the highest fan speed in RPM (0 on fanless Macs).
 	FanRPM int
+	// NetRxBytes / NetTxBytes are cumulative interface counters (since boot)
+	// summed across non-loopback interfaces. Today's totals are computed at
+	// query time by subtracting the first sample-after-midnight from the
+	// latest sample (see GetTodayNetworkUsage).
+	NetRxBytes int64
+	NetTxBytes int64
 }
 
 type ProcessSample struct {
@@ -150,10 +156,13 @@ func initSchema(db *sql.DB) error {
 
 	// Schema migrations. SQLite has no "ADD COLUMN IF NOT EXISTS", so we run
 	// each ALTER and swallow the "duplicate column name" error that fires on
-	// subsequent boots. New columns: temp_c / fan_rpm (thermal).
+	// subsequent boots. New columns: temp_c / fan_rpm (thermal) and
+	// net_rx_bytes / net_tx_bytes (network throughput).
 	for _, alter := range []string{
 		`ALTER TABLE system_samples ADD COLUMN temp_c REAL DEFAULT 0`,
 		`ALTER TABLE system_samples ADD COLUMN fan_rpm INTEGER DEFAULT 0`,
+		`ALTER TABLE system_samples ADD COLUMN net_rx_bytes INTEGER DEFAULT 0`,
+		`ALTER TABLE system_samples ADD COLUMN net_tx_bytes INTEGER DEFAULT 0`,
 	} {
 		if _, err := db.Exec(alter); err != nil && !isDuplicateColumnErr(err) {
 			return fmt.Errorf("migrate %q: %w", alter, err)
@@ -185,13 +194,13 @@ func contains(s, sub string) bool {
 
 func (s *Store) InsertSystemSample(sample SystemSample) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, temp_c, fan_rpm)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, temp_c, fan_rpm, net_rx_bytes, net_tx_bytes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sample.Timestamp, sample.Load1, sample.Load5, sample.Load15,
 		sample.Ncpu, sample.MemPressure, sample.SwapUsedGB,
 		sample.Pageins, sample.Pageouts, sample.CompressorPages,
 		sample.Swapins, sample.Swapouts,
-		sample.TempC, sample.FanRPM,
+		sample.TempC, sample.FanRPM, sample.NetRxBytes, sample.NetTxBytes,
 	)
 	if err != nil {
 		return 0, err

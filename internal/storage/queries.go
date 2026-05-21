@@ -11,7 +11,7 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
 		        pageins, pageouts, compressor_pages, swapins, swapouts,
-		        temp_c, fan_rpm
+		        temp_c, fan_rpm, net_rx_bytes, net_tx_bytes
 		 FROM system_samples WHERE timestamp >= ? ORDER BY timestamp ASC`, cutoff,
 	)
 	if err != nil {
@@ -26,7 +26,7 @@ func (s *Store) GetSystemTimeSeries(hours int) ([]SystemSample, error) {
 			&s.Ncpu, &s.MemPressure, &s.SwapUsedGB,
 			&s.Pageins, &s.Pageouts, &s.CompressorPages,
 			&s.Swapins, &s.Swapouts,
-			&s.TempC, &s.FanRPM); err != nil {
+			&s.TempC, &s.FanRPM, &s.NetRxBytes, &s.NetTxBytes); err != nil {
 			return nil, err
 		}
 		samples = append(samples, s)
@@ -40,17 +40,57 @@ func (s *Store) GetLatestSample() (*SystemSample, error) {
 	err := s.db.QueryRow(
 		`SELECT id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
 		        pageins, pageouts, compressor_pages, swapins, swapouts,
-		        temp_c, fan_rpm
+		        temp_c, fan_rpm, net_rx_bytes, net_tx_bytes
 		 FROM system_samples ORDER BY id DESC LIMIT 1`,
 	).Scan(&sample.ID, &sample.Timestamp, &sample.Load1, &sample.Load5, &sample.Load15,
 		&sample.Ncpu, &sample.MemPressure, &sample.SwapUsedGB,
 		&sample.Pageins, &sample.Pageouts, &sample.CompressorPages,
 		&sample.Swapins, &sample.Swapouts,
-		&sample.TempC, &sample.FanRPM)
+		&sample.TempC, &sample.FanRPM, &sample.NetRxBytes, &sample.NetTxBytes)
 	if err != nil {
 		return nil, err
 	}
 	return &sample, nil
+}
+
+// GetTodayNetworkUsage returns today's cumulative rx/tx bytes by subtracting
+// the first sample taken after local midnight from the most recent sample.
+// Returns zero values (no error) when there isn't yet a "baseline" sample
+// for today — e.g. the daemon was first started after midnight and only one
+// sample exists. The launchd collector boots at startup, so once the box has
+// been awake for a 5-min cycle past midnight this will produce real numbers.
+func (s *Store) GetTodayNetworkUsage() (rx, tx int64, err error) {
+	// Local-midnight cutoff, in the same RFC3339 format the samples use.
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	cutoff := midnight.Format(time.RFC3339)
+
+	var firstRx, firstTx, lastRx, lastTx int64
+	row := s.db.QueryRow(
+		`SELECT net_rx_bytes, net_tx_bytes
+		 FROM system_samples WHERE timestamp >= ?
+		 ORDER BY timestamp ASC LIMIT 1`, cutoff,
+	)
+	if err = row.Scan(&firstRx, &firstTx); err != nil {
+		return 0, 0, nil // no samples yet today — treat as zero, not an error
+	}
+	row = s.db.QueryRow(
+		`SELECT net_rx_bytes, net_tx_bytes
+		 FROM system_samples WHERE timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`, cutoff,
+	)
+	if err = row.Scan(&lastRx, &lastTx); err != nil {
+		return 0, 0, nil
+	}
+	rx = lastRx - firstRx
+	tx = lastTx - firstTx
+	if rx < 0 {
+		rx = 0
+	}
+	if tx < 0 {
+		tx = 0
+	}
+	return rx, tx, nil
 }
 
 // ProcessTimeSeries represents a named process's values over time.
