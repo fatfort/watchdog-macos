@@ -38,12 +38,15 @@ const (
 	thinSpace = " "
 	// midDot separates logical groups (thermal vs network).
 	midDot = " · "
-	// Text font for the menubar values. iStatistica's reference shows the
-	// numbers at roughly half the menubar height per row — 11pt with the
-	// tight line spacing patched into the paragraph style fits cleanly.
-	menubarFontSize = 11.0
-	// SF Symbol point size for the left icon. Slightly larger than the
-	// text so the icon visually dominates the cell the way iStat's does.
+	// Text font for the menubar values. 9pt at the standard ~22pt
+	// menubar gives two stacked rows with a comfortable 1-2pt gap and
+	// no overlap. iStatistica uses something similar (slightly thinner
+	// numerals because they ship a custom font).
+	menubarFontSize = 9.0
+	// SF Symbol point size for each widget's icon. The renderer
+	// preserves the symbol's natural aspect ratio when drawing, so this
+	// is the icon's *height*; thermometer (tall-narrow) ends up
+	// narrower than globe (square-ish), the way iStat shows it.
 	menubarIconSize = 16.0
 )
 

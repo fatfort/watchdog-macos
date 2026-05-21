@@ -94,27 +94,48 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
     CGFloat leftTextW  = MAX(r1lSz.width, r2lSz.width);
     CGFloat rightTextW = MAX(r1rSz.width, r2rSz.width);
 
+    // Resolve icons up-front so we can preserve their natural aspect
+    // ratio in the layout. Forcing thermometer (tall-narrow) into a
+    // square iconSize box squished it visually; here we keep the
+    // symbol's intrinsic width:height and only constrain the height.
+    NSImage *icon1 = resolveSymbol(icon1Name, iconSize);
+    NSImage *icon2 = resolveSymbol(icon2Name, iconSize);
+    CGFloat targetIconH = iconSize;
+    CGFloat icon1W = (icon1 != nil && icon1.size.height > 0)
+        ? icon1.size.width * (targetIconH / icon1.size.height)
+        : iconSize;
+    CGFloat icon2W = (icon2 != nil && icon2.size.height > 0)
+        ? icon2.size.width * (targetIconH / icon2.size.height)
+        : iconSize;
+
     // Layout constants tuned to match iStatistica's spacing.
     const CGFloat iconTextGap = 3;  // gap between icon and its text column
     const CGFloat widgetGap   = 8;  // gap between the two widgets
     const CGFloat sidePadding = 1;  // tiny padding around the whole pill
 
     CGFloat totalW = sidePadding
-                   + iconSize + iconTextGap + leftTextW
+                   + icon1W + iconTextGap + leftTextW
                    + widgetGap
-                   + iconSize + iconTextGap + rightTextW
+                   + icon2W + iconTextGap + rightTextW
                    + sidePadding;
-    // Menubar content height — keep below the system menubar (~22pt)
-    // so the bar doesn't expand. 18pt fits a 16pt icon plus a hair of
-    // padding above and below.
-    CGFloat totalH = 18;
+    // Match the user's actual menubar height (varies by display
+    // density: ~22pt on standard, ~24pt on retina-heavy setups).
+    // systemStatusBar.thickness gives the live value; fall back to 22
+    // if the API returns something unexpected.
+    CGFloat totalH = [NSStatusBar systemStatusBar].thickness;
+    if (totalH < 18 || totalH > 32) totalH = 22;
+
+    // Row baselines. Bottom row sits 1pt above the bottom edge; top
+    // row baseline lands so its ascender clears the descender of the
+    // bottom row. textSize is the font's nominal height; the system
+    // font's actual line height ~ textSize * 1.17, so we space rows
+    // by textSize + 1 which gives clean separation without overlap.
+    CGFloat rowBottomY = 1;
+    CGFloat rowTopY    = rowBottomY + textSize + 1;
 
     NSImage *out = [NSImage imageWithSize:NSMakeSize(totalW, totalH)
                                   flipped:NO
                            drawingHandler:^BOOL(NSRect rect) {
-        // Drawing is in pixel coords; everything is black-on-transparent
-        // so the template tint applied by macOS recolours to match the
-        // active menubar appearance.
         NSColor *fg = [NSColor blackColor];
         NSDictionary *textAttrs = @{
             NSFontAttributeName: font,
@@ -123,18 +144,10 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
 
         CGFloat x = sidePadding;
 
-        // Vertical positions for the two text rows. Top row starts a
-        // bit below the top edge; bottom row sits a bit above the
-        // bottom edge. The tiny offsets keep the descender legible.
-        CGFloat rowTopY    = totalH - textSize - 1;
-        CGFloat rowBottomY = 0;
-
-        // Icon 1 — vertically centred in the cell.
-        NSImage *icon1 = resolveSymbol(icon1Name, iconSize);
+        // Icon 1 — vertically centred, natural aspect ratio preserved.
         if (icon1 != nil) {
-            NSRect iconRect = NSMakeRect(x, (totalH - iconSize) / 2, iconSize, iconSize);
-            // Render the templated symbol in `fg` so the bitmap we're
-            // building is itself a template (set on `out` below).
+            NSRect iconRect = NSMakeRect(x, (totalH - targetIconH) / 2,
+                                          icon1W, targetIconH);
             [icon1 drawInRect:iconRect
                      fromRect:NSZeroRect
                     operation:NSCompositingOperationSourceOver
@@ -142,9 +155,8 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
                respectFlipped:YES
                         hints:nil];
         }
-        x += iconSize + iconTextGap;
+        x += icon1W + iconTextGap;
 
-        // Text column 1 — two rows, top + bottom.
         if (r1l.length > 0) {
             [r1l drawAtPoint:NSMakePoint(x, rowTopY) withAttributes:textAttrs];
         }
@@ -153,10 +165,9 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
         }
         x += leftTextW + widgetGap;
 
-        // Icon 2.
-        NSImage *icon2 = resolveSymbol(icon2Name, iconSize);
         if (icon2 != nil) {
-            NSRect iconRect = NSMakeRect(x, (totalH - iconSize) / 2, iconSize, iconSize);
+            NSRect iconRect = NSMakeRect(x, (totalH - targetIconH) / 2,
+                                          icon2W, targetIconH);
             [icon2 drawInRect:iconRect
                      fromRect:NSZeroRect
                     operation:NSCompositingOperationSourceOver
@@ -164,9 +175,8 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
                respectFlipped:YES
                         hints:nil];
         }
-        x += iconSize + iconTextGap;
+        x += icon2W + iconTextGap;
 
-        // Text column 2.
         if (r1r.length > 0) {
             [r1r drawAtPoint:NSMakePoint(x, rowTopY) withAttributes:textAttrs];
         }
@@ -175,7 +185,7 @@ static NSImage *renderCombinedWidget(double textSize, double iconSize,
         }
         return YES;
     }];
-    out.template = YES; // adapt to menubar tint (white on dark, etc.)
+    out.template = YES;
     return out;
 }
 
