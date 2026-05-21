@@ -87,6 +87,7 @@ func init() {
 	rootCmd.AddCommand(summaryCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(topCmd)
+	rootCmd.AddCommand(menubarCmd)
 }
 
 func main() {

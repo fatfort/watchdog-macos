@@ -43,6 +43,13 @@ func Collect() (*CollectResult, error) {
 		return nil, fmt.Errorf("vmstat: %w", err)
 	}
 
+	// Thermal + network are best-effort like zones: SMC can return EACCES on
+	// some configurations and we don't want the whole collect to fail because
+	// a fanless Mac has no F0Ac key. Errors are swallowed; zero values flow
+	// through to the dashboard.
+	_ = collectThermal(&result.System)
+	_ = collectNetwork(&result.System)
+
 	procs, err := collectProcesses()
 	if err != nil {
 		return nil, fmt.Errorf("processes: %w", err)
@@ -322,6 +329,99 @@ func parseKernelZones(out string) []storage.ZoneSample {
 		zones = zones[:TopZoneCount]
 	}
 	return zones
+}
+
+// collectNetwork reads cumulative since-boot rx/tx byte counters from
+// `/usr/sbin/netstat -ib`. netstat lists every (interface, address-family)
+// row but the byte counters are identical across all rows for the same
+// interface; we dedupe by interface name and sum across en*/utun*/bridge*/
+// awdl*/llw*/ap*, skipping lo0 (loopback) and gif/stf/anpi pseudo-devices.
+// The totals are stored as-is; today's delta is computed at query time
+// (see storage.GetTodayNetworkUsage).
+func collectNetwork(s *storage.SystemSample) error {
+	out, err := run("/usr/sbin/netstat", "-ib")
+	if err != nil {
+		return err
+	}
+
+	// Header columns: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll [Drop]
+	// We want Name (0), Ibytes (6), Obytes (9).
+	seen := make(map[string]bool)
+	var rx, tx int64
+	for i, line := range strings.Split(out, "\n") {
+		if i == 0 {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		name := fields[0]
+		if seen[name] {
+			continue
+		}
+		if !includeNetIface(name) {
+			seen[name] = true
+			continue
+		}
+		ibytes, err1 := strconv.ParseInt(fields[6], 10, 64)
+		obytes, err2 := strconv.ParseInt(fields[9], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		seen[name] = true
+		rx += ibytes
+		tx += obytes
+	}
+	s.NetRxBytes = rx
+	s.NetTxBytes = tx
+	return nil
+}
+
+// includeNetIface reports whether an interface name should contribute to the
+// global rx/tx totals. We include physical and tunnel interfaces and exclude
+// loopback / packet-tap pseudo-devices.
+func includeNetIface(name string) bool {
+	if name == "" || strings.HasPrefix(name, "lo") {
+		return false
+	}
+	if strings.HasPrefix(name, "gif") || strings.HasPrefix(name, "stf") {
+		return false
+	}
+	if strings.HasPrefix(name, "anpi") {
+		// Internal Apple network pseudo-iface; not user traffic.
+		return false
+	}
+	switch {
+	case strings.HasPrefix(name, "en"),
+		strings.HasPrefix(name, "utun"),
+		strings.HasPrefix(name, "bridge"),
+		strings.HasPrefix(name, "awdl"),
+		strings.HasPrefix(name, "llw"),
+		strings.HasPrefix(name, "ap"):
+		return true
+	}
+	return false
+}
+
+// collectThermal populates TempC and FanRPM from the SMC via IOKit. The cgo
+// implementation lives in smc_darwin.go; this wrapper exists so the call
+// from Collect() stays symmetric with the other collectors.
+func collectThermal(s *storage.SystemSample) error {
+	temp, fan, err := readSMCThermal()
+	if err != nil {
+		return err
+	}
+	s.TempC = temp
+	s.FanRPM = fan
+	return nil
+}
+
+// ReadThermal exposes the SMC reader to other packages (the menubar polls
+// it every 2s without going through storage). Returns the same values
+// collectThermal would write into a SystemSample.
+func ReadThermal() (tempC float64, fanRPM int, err error) {
+	return readSMCThermal()
 }
 
 // parseZprintSize parses zprint's human-readable sizes ("0K", "61K", "365M", "9G")

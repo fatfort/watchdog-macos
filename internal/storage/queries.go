@@ -12,7 +12,8 @@ import (
 const systemSampleColumns = `id, timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb,
        pageins, pageouts, compressor_pages, swapins, swapouts,
        COALESCE(battery_pct, -1), COALESCE(power_source, ''), COALESCE(charging, 0),
-       COALESCE(disk_read_kb_per_sec, 0), COALESCE(disk_write_kb_per_sec, 0), COALESCE(disk_tps, 0)`
+       COALESCE(disk_read_kb_per_sec, 0), COALESCE(disk_write_kb_per_sec, 0), COALESCE(disk_tps, 0),
+       COALESCE(temp_c, 0), COALESCE(fan_rpm, 0), COALESCE(net_rx_bytes, 0), COALESCE(net_tx_bytes, 0)`
 
 func scanSystemSample(scan func(...interface{}) error, s *SystemSample) error {
 	return scan(&s.ID, &s.Timestamp, &s.Load1, &s.Load5, &s.Load15,
@@ -20,7 +21,8 @@ func scanSystemSample(scan func(...interface{}) error, s *SystemSample) error {
 		&s.Pageins, &s.Pageouts, &s.CompressorPages,
 		&s.Swapins, &s.Swapouts,
 		&s.BatteryPct, &s.PowerSource, &s.Charging,
-		&s.DiskReadKBPerSec, &s.DiskWriteKBPerSec, &s.DiskTPS)
+		&s.DiskReadKBPerSec, &s.DiskWriteKBPerSec, &s.DiskTPS,
+		&s.TempC, &s.FanRPM, &s.NetRxBytes, &s.NetTxBytes)
 }
 
 // GetSystemTimeSeries returns system samples for the last N hours.
@@ -57,6 +59,46 @@ func (s *Store) GetLatestSample() (*SystemSample, error) {
 		return nil, err
 	}
 	return &sample, nil
+}
+
+// GetTodayNetworkUsage returns today's cumulative rx/tx bytes by subtracting
+// the first sample taken after local midnight from the most recent sample.
+// Returns zero values (no error) when there isn't yet a "baseline" sample
+// for today — e.g. the daemon was first started after midnight and only one
+// sample exists. The launchd collector boots at startup, so once the box has
+// been awake for a 5-min cycle past midnight this will produce real numbers.
+func (s *Store) GetTodayNetworkUsage() (rx, tx int64, err error) {
+	// Local-midnight cutoff, in the same RFC3339 format the samples use.
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	cutoff := midnight.Format(time.RFC3339)
+
+	var firstRx, firstTx, lastRx, lastTx int64
+	row := s.db.QueryRow(
+		`SELECT net_rx_bytes, net_tx_bytes
+		 FROM system_samples WHERE timestamp >= ?
+		 ORDER BY timestamp ASC LIMIT 1`, cutoff,
+	)
+	if err = row.Scan(&firstRx, &firstTx); err != nil {
+		return 0, 0, nil // no samples yet today — treat as zero, not an error
+	}
+	row = s.db.QueryRow(
+		`SELECT net_rx_bytes, net_tx_bytes
+		 FROM system_samples WHERE timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`, cutoff,
+	)
+	if err = row.Scan(&lastRx, &lastTx); err != nil {
+		return 0, 0, nil
+	}
+	rx = lastRx - firstRx
+	tx = lastTx - firstTx
+	if rx < 0 {
+		rx = 0
+	}
+	if tx < 0 {
+		tx = 0
+	}
+	return rx, tx, nil
 }
 
 // ProcessTimeSeries represents a named process's values over time.
