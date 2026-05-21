@@ -9,7 +9,7 @@ import (
 
 	"github.com/abaj8494/macos-watchdog/internal/collector"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
 	"github.com/spf13/cobra"
 )
 
