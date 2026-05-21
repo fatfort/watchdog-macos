@@ -38,6 +38,9 @@ const (
 	thinSpace = " "
 	// midDot separates logical groups (thermal vs network).
 	midDot = " · "
+	// menubarFontSize: 10pt fits two rows in macOS menubar height while
+	// staying legible. 9pt feels cramped; 11pt clips on some users.
+	menubarFontSize = 10.0
 )
 
 var menubarCmd = &cobra.Command{
@@ -124,9 +127,8 @@ func menubarOnReady() {
 	menuDashboard = systray.AddMenuItem("Open Dashboard…", "Open http://localhost:9847 in browser")
 	menuQuit = systray.AddMenuItem("Quit", "Stop the menubar app")
 
-	// Configure the cell only — paintTitle supplies the actual content. The
-	// secondary status item is created lazily on first setMenubarSecondary call.
-	setMenubarPrimary(9, "", "", "")
+	// Configure the cell only — paintTitle supplies the actual content.
+	setMenubarCombined(menubarFontSize, "", "", "", "", "", "")
 
 	go menubarTitleLoop()
 	go menubarSMCLoop()
@@ -162,12 +164,12 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle paints the two side-by-side widgets that together mirror
-// the iStatistica Pro layout — one NSStatusItem per widget so they read
-// as independent stats rather than rows of a single mixed display:
+// paintTitle paints both widgets inside ONE NSStatusItem (one pill) as a
+// 2-row / 4-column layout. Tab stops in the paragraph style line the
+// network arrows under each other in their own column:
 //
-//	[thermometer] NN°       [globe] ↓X.XX
-//	              NNNNrpm           ↑Y.YY
+//	[thermometer]  NN°       [globe]  ↓X.XX
+//	               NNNNrpm            ↑Y.YY
 func paintTitle() {
 	state.mu.RLock()
 	tempC := state.tempC
@@ -181,13 +183,14 @@ func paintTitle() {
 	netRow1 := fmt.Sprintf("↓%s", formatTitleBytes(rx))
 	netRow2 := fmt.Sprintf("↑%s", formatTitleBytes(tx))
 
-	// systray.SetTitle keeps fyne's internal cache sane (and provides a
-	// text fallback if attributedTitle ever fails to take); the visible
-	// primary item is whatever setMenubarPrimary paints last.
+	// Plain-text fallback for fyne's cache; the visible title is the
+	// attributedTitle our cgo helper paints just below.
 	systray.SetTitle(tempRow1 + " " + tempRow2)
 
-	setMenubarPrimary(9, "thermometer.medium", tempRow1, tempRow2)
-	setMenubarSecondary(9, "globe", netRow1, netRow2)
+	setMenubarCombined(menubarFontSize,
+		"thermometer.medium", tempRow1, tempRow2,
+		"globe", netRow1, netRow2,
+	)
 }
 
 func menubarSMCLoop() {

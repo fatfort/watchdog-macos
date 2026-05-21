@@ -2,8 +2,6 @@
 
 package main
 
-// setMenubarPrimary / setMenubarSecondary are no-ops everywhere except
-// darwin + cgo. The AppKit private-ivar dance only makes sense for an
-// actual NSStatusItem.
-func setMenubarPrimary(size float64, symbol, row1, row2 string)   {}
-func setMenubarSecondary(size float64, symbol, row1, row2 string) {}
+// setMenubarCombined is a no-op everywhere except darwin + cgo.
+func setMenubarCombined(size float64, icon1, row1l, row2l, icon2, row1r, row2r string) {
+}
