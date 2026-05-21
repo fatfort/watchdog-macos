@@ -208,6 +208,112 @@ func (s *Store) GetZoneTable(hours int, limit int) ([]ZoneTableRow, error) {
 	return table, rows.Err()
 }
 
+// ZoneTimeSeries represents a single zone's estimated bytes over time.
+type ZoneTimeSeries struct {
+	Name   string
+	Times  []string
+	Values []int64 // bytes
+}
+
+// GetTopZoneNames returns the N zone names with highest average est_bytes over the period.
+func (s *Store) GetTopZoneNames(hours int, limit int) ([]string, error) {
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
+	rows, err := s.db.Query(
+		`SELECT zs.name, AVG(zs.est_bytes) as avg_bytes
+		 FROM zone_samples zs
+		 JOIN system_samples ss ON zs.sample_id = ss.id
+		 WHERE ss.timestamp >= ?
+		 GROUP BY zs.name
+		 ORDER BY avg_bytes DESC
+		 LIMIT ?`, cutoff, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		var avg float64
+		if err := rows.Scan(&name, &avg); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// GetZoneTimeSeries returns est_bytes over time for a specific zone. Mirrors
+// GetProcessMemoryTimeSeries — same shape, different table.
+func (s *Store) GetZoneTimeSeries(name string, hours int) (*ZoneTimeSeries, error) {
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
+	rows, err := s.db.Query(
+		`SELECT ss.timestamp, zs.est_bytes
+		 FROM zone_samples zs
+		 JOIN system_samples ss ON zs.sample_id = ss.id
+		 WHERE zs.name = ? AND ss.timestamp >= ?
+		 ORDER BY ss.timestamp ASC`, name, cutoff,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ts := &ZoneTimeSeries{Name: name}
+	for rows.Next() {
+		var t string
+		var b int64
+		if err := rows.Scan(&t, &b); err != nil {
+			return nil, err
+		}
+		ts.Times = append(ts.Times, t)
+		ts.Values = append(ts.Values, b)
+	}
+	return ts, rows.Err()
+}
+
+// AlertRow is a single row from the alerts table.
+type AlertRow struct {
+	Kind      string  `json:"kind"`
+	LastSent  string  `json:"lastSent"`
+	LastValue float64 `json:"lastValue"`
+}
+
+// GetRecentAlerts returns the most recently-fired alerts, newest first.
+func (s *Store) GetRecentAlerts(limit int) ([]AlertRow, error) {
+	rows, err := s.db.Query(
+		`SELECT kind, last_sent, COALESCE(last_value, 0)
+		 FROM alerts
+		 ORDER BY last_sent DESC
+		 LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AlertRow
+	for rows.Next() {
+		var a AlertRow
+		if err := rows.Scan(&a.Kind, &a.LastSent, &a.LastValue); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// CountRecentAlerts returns how many alerts in the table fired within the last
+// `hours` hours. Used by the dashboard template to decide whether to show the
+// red issue-badge on the Alerts tab.
+func (s *Store) CountRecentAlerts(hours int) (int, error) {
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339)
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE last_sent >= ?`, cutoff).Scan(&n)
+	return n, err
+}
+
 // SummaryStats holds aggregate stats for the CLI summary.
 type SummaryStats struct {
 	SampleCount int

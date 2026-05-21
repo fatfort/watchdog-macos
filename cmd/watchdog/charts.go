@@ -27,6 +27,10 @@ type dashboardData struct {
 	WindowsJSON   template.JS
 	DashboardPath string
 	WatchdogBin   string
+	// Issue badges: rendered server-side at template time so the indicator is
+	// visible immediately on page load (no flicker, no extra fetch).
+	OverviewBadge string // "" or "warn"
+	AlertsBadge   string // "" or "fail"
 }
 
 func generateChartsHTML(store *storage.Store) (string, error) {
@@ -186,6 +190,18 @@ func generateChartsHTML(store *storage.Store) (string, error) {
 		} else if latest.MemPressure > 50 {
 			data.PressureColor = "#ffce56"
 		}
+
+		// Yellow dot on Overview tab if current pressure or swap are above the
+		// noise floor — surface the issue without forcing the user to look.
+		if latest.MemPressure >= 60 || latest.SwapUsedGB >= 5 {
+			data.OverviewBadge = "warn"
+		}
+	}
+
+	// Red dot on Alerts tab if any alert fired in the last 24h. Best-effort;
+	// if the query fails we just omit the badge.
+	if n, err := store.CountRecentAlerts(24); err == nil && n > 0 {
+		data.AlertsBadge = "fail"
 	}
 
 	// Find watchdog binary and dashboard path for refresh button
@@ -225,12 +241,38 @@ const dashboardTemplate = `<!DOCTYPE html>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,5 95,50 50,95 5,50' fill='none' stroke='%23ff6384' stroke-width='6'/><polygon points='50,22 78,50 50,78 22,50' fill='%23ff638444' stroke='%23ff9f40' stroke-width='3'/><circle cx='50' cy='50' r='8' fill='%23ff6384'/></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        /*
+         * Design tokens. Centralised so the palette is consistent across the
+         * dashboard — chart colors below also reference these via JS where it
+         * matters. Hue family kept warm-coral + cool-blue so the dark theme
+         * reads as one cohesive surface rather than Chart.js defaults.
+         */
+        :root {
+            --bg:           #0d1117;
+            --panel:        #161b22;
+            --panel-sunken: #0b0f14;
+            --border:       #30363d;
+            --border-soft:  #21262d;
+            --text:         #c9d1d9;
+            --text-dim:     #8b949e;
+            --text-muted:   #484f58;
+
+            --accent:      #ff6384;  /* warm coral — primary */
+            --accent-soft: #ff638422;
+            --accent-glow: #ff638488;
+            --warn:        #ffce56;  /* amber */
+            --warn-glow:   #ffce5688;
+            --ok:          #3fb950;  /* green */
+            --info:        #58a6ff;  /* cool blue — links / hover */
+            --info-soft:   #1f6feb33;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0d1117;
-            color: #c9d1d9;
+            background: var(--bg);
+            color: var(--text);
             min-height: 100vh;
             padding: 30px;
         }
@@ -373,6 +415,25 @@ const dashboardTemplate = `<!DOCTYPE html>
         .tabs button.active {
             color: #ff6384;
             border-bottom-color: #ff6384;
+        }
+        /* Issue-badge: small dot next to a tab title indicating "look here". */
+        .tab-badge {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            margin-left: 6px;
+            vertical-align: 1px;
+        }
+        .tab-badge.warn { background: var(--warn); box-shadow: 0 0 6px var(--warn-glow); }
+        .tab-badge.fail {
+            background: var(--accent);
+            box-shadow: 0 0 6px var(--accent-glow);
+            animation: pulse 1.8s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.45; }
         }
         .tab-panel { display: none; max-width: 1400px; margin: 0 auto; }
         .tab-panel.active { display: block; }
@@ -553,6 +614,102 @@ const dashboardTemplate = `<!DOCTYPE html>
         .agent-detail-header .reasons.warn li  { color: #ffce56; }
         .agent-detail-header .reasons.ok li    { color: #3fb950; }
         .agent-detail-header .reasons.unknown li { color: #8b949e; }
+
+        /* Keyboard-shortcuts overlay (toggled with the ? key). */
+        .shortcuts-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(3px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .shortcuts-overlay.open { display: flex; }
+        .shortcuts-card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 28px 32px;
+            min-width: 340px;
+            max-width: 90vw;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .shortcuts-card h2 {
+            font-size: 1.1em;
+            margin-bottom: 16px;
+            color: var(--text);
+        }
+        .shortcuts-card dl {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px 18px;
+            font-size: 0.88em;
+        }
+        .shortcuts-card dt {
+            font-family: 'SF Mono', Menlo, monospace;
+            color: var(--accent);
+            background: var(--accent-soft);
+            padding: 2px 8px;
+            border-radius: 4px;
+            justify-self: start;
+            font-size: 0.85em;
+        }
+        .shortcuts-card dd { color: var(--text-dim); align-self: center; }
+        .shortcuts-card .hint {
+            margin-top: 16px;
+            font-size: 0.78em;
+            color: var(--text-muted);
+            text-align: right;
+        }
+
+        /* Zones tab uses the same chart-box look as the dashboard. */
+        .zones-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Alerts table — reuses .process-table styling but with status pills. */
+        .alerts-table .pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.78em;
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        .alerts-table .pill.pressure { background: var(--accent-soft); color: var(--accent); }
+        .alerts-table .pill.swap     { background: #ffce5622; color: var(--warn); }
+        .alerts-table .pill.zone     { background: #9966ff22; color: #9966ff; }
+        .alerts-table .pill.process  { background: #4bc0c022; color: #4bc0c0; }
+        .alerts-table .pill.default  { background: var(--border-soft); color: var(--text-dim); }
+
+        /* Responsive: progressively collapse the desktop grid for tablet/phone.
+           Breakpoints are intentionally conservative — most readers are on
+           wide displays and we don't want to fight the wide-table layouts. */
+        @media (max-width: 1100px) {
+            body { padding: 18px; }
+            .summary-cards { grid-template-columns: repeat(2, 1fr); }
+            .charts-container { grid-template-columns: 1fr; }
+            .cron-layout { grid-template-columns: 220px 1fr; }
+        }
+        @media (max-width: 700px) {
+            body { padding: 12px; }
+            h1 { font-size: 1.6em; }
+            .summary-cards { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .summary-cards .card { padding: 12px; }
+            .summary-cards .card .value { font-size: 1.3em; }
+            .tabs { overflow-x: auto; flex-wrap: nowrap; justify-content: flex-start; }
+            .tabs button { padding: 10px 14px; font-size: 0.88em; white-space: nowrap; }
+            .controls { flex-wrap: wrap; }
+            .cron-layout { grid-template-columns: 1fr; }
+            .cron-sidebar { max-height: 240px; }
+            .process-table { font-size: 0.78em; }
+            .process-table th, .process-table td { padding: 5px 6px; }
+        }
     </style>
 </head>
 <body>
@@ -560,10 +717,12 @@ const dashboardTemplate = `<!DOCTYPE html>
     <p class="subtitle">System Health Dashboard &middot; Last sample: {{.LastUpdate}}</p>
 
     <div class="tabs">
-        <button onclick="setTab('dashboard')" id="tab-dashboard" class="active">Dashboard</button>
+        <button onclick="setTab('dashboard')" id="tab-dashboard" class="active">Dashboard{{if .OverviewBadge}}<span class="tab-badge {{.OverviewBadge}}" title="Memory pressure or swap above noise floor"></span>{{end}}</button>
         <button onclick="setTab('ssh')" id="tab-ssh">SSH</button>
         <button onclick="setTab('crons')" id="tab-crons">Crons</button>
         <button onclick="setTab('agents')" id="tab-agents">Agents</button>
+        <button onclick="setTab('zones')" id="tab-zones">Zones</button>
+        <button onclick="setTab('alerts')" id="tab-alerts">Alerts{{if .AlertsBadge}}<span class="tab-badge {{.AlertsBadge}}" title="Alert fired in the last 24h"></span>{{end}}</button>
     </div>
 
     <div id="panel-dashboard" class="tab-panel active">
@@ -695,6 +854,83 @@ const dashboardTemplate = `<!DOCTYPE html>
                 </div>
                 <div class="log-view" id="cronLog">Select a cron entry on the left.</div>
             </div>
+        </div>
+    </div>
+
+    <div id="panel-zones" class="tab-panel">
+        <div class="log-toolbar">
+            <label>Window</label>
+            <select id="zoneHours" onchange="loadZones()">
+                <option value="4">4h</option>
+                <option value="24" selected>24h</option>
+                <option value="168">7d</option>
+                <option value="720">30d</option>
+            </select>
+            <button onclick="loadZones()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="zoneStatus"></span>
+        </div>
+        <div class="zones-container">
+            <div class="chart-box">
+                <h2>Top 5 Kernel Zones (estimated bytes)</h2>
+                <canvas id="zoneChart"></canvas>
+                <p class="threshold-note">Top zones by average est_bytes (elem_size × inuse). Watch for monotonic growth.</p>
+            </div>
+            <div class="chart-box">
+                <h2>Top 20 Zones Summary</h2>
+                <table class="process-table" id="zoneTable">
+                    <thead>
+                        <tr>
+                            <th onclick="sortZoneTable(0)">Zone<span class="sort-arrow"></span></th>
+                            <th onclick="sortZoneTable(1)">Current<span class="sort-arrow"></span></th>
+                            <th onclick="sortZoneTable(2)">Peak<span class="sort-arrow"></span></th>
+                            <th onclick="sortZoneTable(3)">Avg<span class="sort-arrow"></span></th>
+                            <th onclick="sortZoneTable(4)">Elem Size<span class="sort-arrow"></span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="zoneTableBody"><tr><td colspan="5" style="color:#484f58">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="panel-alerts" class="tab-panel">
+        <div class="log-toolbar">
+            <button onclick="loadAlerts()">&#8635; Reload</button>
+            <span class="spacer"></span>
+            <span class="status" id="alertStatus"></span>
+        </div>
+        <div class="chart-box">
+            <h2>Recent Alerts (last 50)</h2>
+            <table class="process-table alerts-table" id="alertsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortAlertsTable(0)">Kind<span class="sort-arrow"></span></th>
+                        <th onclick="sortAlertsTable(1)">Last Sent<span class="sort-arrow"></span></th>
+                        <th onclick="sortAlertsTable(2)">Last Value<span class="sort-arrow"></span></th>
+                    </tr>
+                </thead>
+                <tbody id="alertsTableBody"><tr><td colspan="3" style="color:#484f58">Click the Alerts tab to load.</td></tr></tbody>
+            </table>
+            <p class="threshold-note">Alerts are de-duplicated server-side per kind with a cool-down; last_sent is the most recent fire.</p>
+        </div>
+    </div>
+
+    <div class="shortcuts-overlay" id="shortcutsOverlay" onclick="toggleShortcuts(false)">
+        <div class="shortcuts-card" onclick="event.stopPropagation()">
+            <h2>Keyboard Shortcuts</h2>
+            <dl>
+                <dt>1</dt><dd>Dashboard</dd>
+                <dt>2</dt><dd>SSH</dd>
+                <dt>3</dt><dd>Crons</dd>
+                <dt>4</dt><dd>Agents</dd>
+                <dt>5</dt><dd>Zones</dd>
+                <dt>6</dt><dd>Alerts</dd>
+                <dt>r</dt><dd>Refresh dashboard data</dd>
+                <dt>?</dt><dd>Toggle this help</dd>
+                <dt>Esc</dt><dd>Close this help</dd>
+            </dl>
+            <div class="hint">Press ? again or Esc to close</div>
         </div>
     </div>
 
@@ -928,6 +1164,8 @@ let currentTab = 'dashboard';
 let sshLoaded = false;
 let cronsLoaded = false;
 let agentsLoaded = false;
+let zonesLoaded = false;
+let alertsLoaded = false;
 let selectedCronIdx = -1;
 let cronEntries = [];
 let agentEntries = [];
@@ -943,6 +1181,8 @@ function setTab(tab) {
     if (tab === 'ssh' && !sshLoaded) loadSSH();
     if (tab === 'crons' && !cronsLoaded) loadCrontabs();
     if (tab === 'agents' && !agentsLoaded) loadAgents();
+    if (tab === 'zones' && !zonesLoaded) loadZones();
+    if (tab === 'alerts' && !alertsLoaded) loadAlerts();
 }
 
 async function loadSSH() {
@@ -1159,6 +1399,230 @@ async function loadAgentLog(label) {
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// ---------- Zones tab ----------
+function formatBytes(n) {
+    if (n >= (1<<30)) return (n/(1<<30)).toFixed(1) + 'GB';
+    if (n >= (1<<20)) return (n/(1<<20)).toFixed(0) + 'MB';
+    if (n >= (1<<10)) return (n/(1<<10)).toFixed(0) + 'KB';
+    return n + 'B';
+}
+
+async function loadZones() {
+    const hours = document.getElementById('zoneHours').value;
+    const status = document.getElementById('zoneStatus');
+    const tbody = document.getElementById('zoneTableBody');
+    status.textContent = 'Loading...';
+    try {
+        const res = await fetch('/api/zones?hours=' + hours);
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        const data = await res.json();
+        renderZoneChart(data.series || []);
+        const rows = (data.table || []).map(z =>
+            '<tr><td>' + escapeHtml(z.Name) + '</td>' +
+            '<td>' + formatBytes(z.CurrentBytes) + '</td>' +
+            '<td>' + formatBytes(z.PeakBytes) + '</td>' +
+            '<td>' + formatBytes(Math.round(z.AvgBytes)) + '</td>' +
+            '<td>' + z.ElemSize + 'B</td></tr>'
+        ).join('');
+        tbody.innerHTML = rows || '<tr><td colspan="5" style="color:#484f58">(no zone samples)</td></tr>';
+        zonesLoaded = true;
+        status.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#ff6384">Error: ' + escapeHtml(e.message) + '</td></tr>';
+        status.textContent = '';
+    }
+}
+
+function renderZoneChart(series) {
+    // Build a unified timeline by union of all sample timestamps. Different
+    // zones may have slightly different sample sets if one was absent in some
+    // ticks — joining by time keeps the chart honest rather than aligning by
+    // index.
+    const timeSet = new Set();
+    series.forEach(s => (s.Times || []).forEach(t => timeSet.add(t)));
+    const times = Array.from(timeSet).sort();
+    const labels = times.map(t => {
+        const d = new Date(t);
+        return (d.getMonth()+1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    });
+
+    const datasets = series.map((s, i) => {
+        const color = ['#ff6384','#36a2eb','#ffce56','#4bc0c0','#9966ff'][i % 5];
+        const tmap = {};
+        (s.Times || []).forEach((t, j) => { tmap[t] = s.Values[j]; });
+        return {
+            label: s.Name,
+            data: times.map(t => (tmap[t] !== undefined) ? (tmap[t] / (1<<20)) : null),
+            borderColor: color,
+            backgroundColor: color + '22',
+            fill: false,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            pointHoverRadius: 5,
+            pointHitRadius: 15,
+            tension: 0.3,
+            spanGaps: true
+        };
+    });
+
+    makeChart('zoneChart', {
+        type: 'line',
+        data: { labels: labels, datasets: datasets },
+        options: {
+            responsive: true,
+            ...hoverConfig,
+            scales: {
+                y: {
+                    ...defaultScaleY,
+                    min: 0,
+                    ticks: { ...defaultScaleY.ticks, callback: v => v + 'MB' },
+                    title: { display: true, text: 'est_bytes (MB)', color: '#484f58' }
+                },
+                x: defaultScaleX
+            },
+            plugins: {
+                ...hoverConfig.plugins,
+                legend: { labels: { color: '#8b949e', boxWidth: 10, padding: 12 } }
+            }
+        }
+    });
+}
+
+let zoneSortCol = -1, zoneSortAsc = true;
+function sortZoneTable(col) {
+    const tbody = document.getElementById('zoneTableBody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    if (rows.length < 2) return;
+    if (zoneSortCol === col) { zoneSortAsc = !zoneSortAsc; } else { zoneSortCol = col; zoneSortAsc = col === 0; }
+    rows.sort((a, b) => {
+        let av = (a.cells[col] || {}).textContent || '';
+        let bv = (b.cells[col] || {}).textContent || '';
+        if (col === 0) return zoneSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+        // Convert formatted byte strings back to a sortable number.
+        const parse = s => {
+            const m = s.match(/([0-9.]+)\s*(GB|MB|KB|B)?/);
+            if (!m) return 0;
+            const n = parseFloat(m[1]);
+            switch ((m[2]||'').toUpperCase()) {
+                case 'GB': return n * (1<<30);
+                case 'MB': return n * (1<<20);
+                case 'KB': return n * (1<<10);
+                default:   return n;
+            }
+        };
+        const an = parse(av), bn = parse(bv);
+        return zoneSortAsc ? an - bn : bn - an;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    document.querySelectorAll('#zoneTable th .sort-arrow').forEach((el, i) => {
+        el.textContent = i === col ? (zoneSortAsc ? ' ▲' : ' ▼') : '';
+    });
+}
+
+// ---------- Alerts tab ----------
+function alertKindPill(kind) {
+    const k = String(kind || '').toLowerCase();
+    let cls = 'default';
+    if (k.includes('pressure')) cls = 'pressure';
+    else if (k.includes('swap')) cls = 'swap';
+    else if (k.includes('zone')) cls = 'zone';
+    else if (k.includes('process') || k.includes('proc')) cls = 'process';
+    return '<span class="pill ' + cls + '">' + escapeHtml(kind) + '</span>';
+}
+
+function formatAlertValue(kind, v) {
+    const k = String(kind || '').toLowerCase();
+    if (v === null || v === undefined) return '-';
+    if (k.includes('pressure')) return v.toFixed(0) + '%';
+    if (k.includes('swap'))     return v.toFixed(1) + 'GB';
+    if (k.includes('zone') || k.includes('bytes')) return formatBytes(v);
+    return String(v);
+}
+
+async function loadAlerts() {
+    const status = document.getElementById('alertStatus');
+    const tbody = document.getElementById('alertsTableBody');
+    status.textContent = 'Loading...';
+    try {
+        const res = await fetch('/api/alerts');
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + await res.text());
+        const rows = await res.json();
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:#484f58">No alerts on record. Email-alerts will land here when threshold rules fire.</td></tr>';
+        } else {
+            tbody.innerHTML = rows.map(a => {
+                const t = new Date(a.lastSent);
+                const isoLocal = isNaN(t) ? a.lastSent : t.toLocaleString();
+                return '<tr>' +
+                    '<td>' + alertKindPill(a.kind) + '</td>' +
+                    '<td>' + escapeHtml(isoLocal) + '</td>' +
+                    '<td>' + escapeHtml(formatAlertValue(a.kind, a.lastValue)) + '</td>' +
+                '</tr>';
+            }).join('');
+        }
+        alertsLoaded = true;
+        status.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="3" style="color:#ff6384">Error: ' + escapeHtml(e.message) + '<br>(Alerts endpoint requires watchdog serve.)</td></tr>';
+        status.textContent = '';
+    }
+}
+
+let alertsSortCol = -1, alertsSortAsc = true;
+function sortAlertsTable(col) {
+    const tbody = document.getElementById('alertsTableBody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    if (rows.length < 2) return;
+    if (alertsSortCol === col) { alertsSortAsc = !alertsSortAsc; } else { alertsSortCol = col; alertsSortAsc = col !== 1; }
+    rows.sort((a, b) => {
+        const av = (a.cells[col] || {}).textContent.trim();
+        const bv = (b.cells[col] || {}).textContent.trim();
+        if (col === 1) {
+            // Date sort
+            return alertsSortAsc ? (new Date(av) - new Date(bv)) : (new Date(bv) - new Date(av));
+        }
+        if (col === 2) {
+            const an = parseFloat(av.replace(/[^0-9.\-]/g, '')) || 0;
+            const bn = parseFloat(bv.replace(/[^0-9.\-]/g, '')) || 0;
+            return alertsSortAsc ? an - bn : bn - an;
+        }
+        return alertsSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    document.querySelectorAll('#alertsTable th .sort-arrow').forEach((el, i) => {
+        el.textContent = i === col ? (alertsSortAsc ? ' ▲' : ' ▼') : '';
+    });
+}
+
+// ---------- Keyboard shortcuts ----------
+const TAB_KEYS = {
+    '1': 'dashboard',
+    '2': 'ssh',
+    '3': 'crons',
+    '4': 'agents',
+    '5': 'zones',
+    '6': 'alerts'
+};
+
+function toggleShortcuts(force) {
+    const el = document.getElementById('shortcutsOverlay');
+    if (typeof force === 'boolean') el.classList.toggle('open', force);
+    else el.classList.toggle('open');
+}
+
+document.addEventListener('keydown', (e) => {
+    // Bail if focus is in an input/select/textarea — don't hijack typing.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    if (e.key === 'Escape') { toggleShortcuts(false); return; }
+    if (e.key === '?') { e.preventDefault(); toggleShortcuts(); return; }
+    if (e.key === 'r' || e.key === 'R') { e.preventDefault(); refreshDashboard(); return; }
+    const tab = TAB_KEYS[e.key];
+    if (tab) { e.preventDefault(); setTab(tab); }
+});
 
 updateCharts();
 </script>

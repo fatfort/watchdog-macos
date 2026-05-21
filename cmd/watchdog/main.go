@@ -333,6 +333,61 @@ func runServe() error {
 		fmt.Fprint(w, out)
 	})
 
+	http.HandleFunc("/api/zones", func(w http.ResponseWriter, r *http.Request) {
+		hours := parseHours(r, 24)
+		store, err := storage.New()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer store.Close()
+
+		table, err := store.GetZoneTable(hours, 20)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		topNames, err := store.GetTopZoneNames(hours, 5)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		series := make([]*storage.ZoneTimeSeries, 0, len(topNames))
+		for _, name := range topNames {
+			ts, err := store.GetZoneTimeSeries(name, hours)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			series = append(series, ts)
+		}
+
+		resp := map[string]interface{}{
+			"table":  table,
+			"series": series,
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	http.HandleFunc("/api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		store, err := storage.New()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer store.Close()
+		rows, err := store.GetRecentAlerts(50)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(rows)
+	})
+
 	http.HandleFunc("/api/cron-log", func(w http.ResponseWriter, r *http.Request) {
 		idx, err := strconv.Atoi(r.URL.Query().Get("idx"))
 		if err != nil {
