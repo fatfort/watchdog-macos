@@ -164,11 +164,10 @@ func menubarTitleLoop() {
 	}
 }
 
-// paintTitle paints two separate NSStatusItems — one for the thermal
-// pair and one for the network pair — matching the iStatistica /
-// iStat Menus layout where each metric group is its own menubar pill
-// with a big SF Symbol icon on the left and two stacked text rows on
-// the right:
+// paintTitle bakes the whole two-widget pill into one image set as
+// button.image — matches iStatistica's layout with big icons and
+// stacked rows, all within ONE NSStatusItem (one pill) at the system
+// menubar height:
 //
 //	[🌡] 49°C   [🌐] ↓41 MB
 //	    0 rpm        ↑28 MB
@@ -185,12 +184,14 @@ func paintTitle() {
 	netRow1 := "↓" + formatTitleBytes(rx)
 	netRow2 := "↑" + formatTitleBytes(tx)
 
-	// Plain-text fallback for fyne's cache; the visible title comes from
-	// the cgo helper's attributedTitle pin below.
+	// Plain-text fallback for fyne's cache; the visible content comes
+	// from the rendered template image below.
 	systray.SetTitle(tempRow1)
 
-	setPrimaryWidget(menubarFontSize, menubarIconSize, "thermometer", tempRow1, tempRow2)
-	setSecondaryWidget(menubarFontSize, menubarIconSize, "globe", netRow1, netRow2)
+	setMenubarPill(menubarFontSize, menubarIconSize,
+		"thermometer", tempRow1, tempRow2,
+		"globe", netRow1, netRow2,
+	)
 }
 
 func menubarSMCLoop() {
