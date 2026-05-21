@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -30,6 +31,18 @@ type SystemSample struct {
 	CompressorPages int64
 	Swapins         int64
 	Swapouts        int64
+	// Power — populated by collectPower. BatteryPct is -1 when no battery is
+	// present (e.g. desktop Macs); PowerSource is "battery" or "ac".
+	BatteryPct  int
+	PowerSource string
+	Charging    bool
+	// IO — populated by collectIO from a 1s iostat sample. macOS `iostat -d`
+	// does NOT split reads vs writes, so DiskReadKBPerSec carries the *combined*
+	// throughput across all disks and DiskWriteKBPerSec is always 0. The schema
+	// keeps the split so a future source (e.g. fs_usage) can fill it in.
+	DiskReadKBPerSec  float64
+	DiskWriteKBPerSec float64
+	DiskTPS           float64
 }
 
 type ProcessSample struct {
@@ -140,18 +153,40 @@ func initSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_zone_sample ON zone_samples(sample_id);
 	CREATE INDEX IF NOT EXISTS idx_zone_name ON zone_samples(name);
 	`
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Additive, idempotent migrations. The shared DB at ~/.local/share/watchdog
+	// holds months of samples, so every new collector adds its columns via
+	// ALTER TABLE and swallows the SQLite "duplicate column name" error so
+	// re-runs are no-ops. Never DROP, never rename — that would break old rows.
+	migrations := []string{
+		`ALTER TABLE system_samples ADD COLUMN battery_pct INTEGER`,
+		`ALTER TABLE system_samples ADD COLUMN power_source TEXT`,
+		`ALTER TABLE system_samples ADD COLUMN charging INTEGER`,
+		`ALTER TABLE system_samples ADD COLUMN disk_read_kb_per_sec REAL`,
+		`ALTER TABLE system_samples ADD COLUMN disk_write_kb_per_sec REAL`,
+		`ALTER TABLE system_samples ADD COLUMN disk_tps REAL`,
+	}
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migration %q: %w", stmt, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) InsertSystemSample(sample SystemSample) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO system_samples (timestamp, load_1, load_5, load_15, ncpu, mem_pressure, swap_used_gb, pageins, pageouts, compressor_pages, swapins, swapouts, battery_pct, power_source, charging, disk_read_kb_per_sec, disk_write_kb_per_sec, disk_tps)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sample.Timestamp, sample.Load1, sample.Load5, sample.Load15,
 		sample.Ncpu, sample.MemPressure, sample.SwapUsedGB,
 		sample.Pageins, sample.Pageouts, sample.CompressorPages,
 		sample.Swapins, sample.Swapouts,
+		sample.BatteryPct, sample.PowerSource, sample.Charging,
+		sample.DiskReadKBPerSec, sample.DiskWriteKBPerSec, sample.DiskTPS,
 	)
 	if err != nil {
 		return 0, err
