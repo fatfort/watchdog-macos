@@ -1,17 +1,30 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/abaj8494/macos-watchdog/internal/collector"
 	"github.com/abaj8494/macos-watchdog/internal/storage"
-	"fyne.io/systray"
 	"github.com/spf13/cobra"
 )
+
+// transparentIcon returns the bytes of a 1×1 fully-transparent PNG. fyne.io
+// systray on macOS won't accept an empty buffer (NSImage decode panics), and
+// we want to display the title text only, so the smallest valid PNG keeps
+// the icon slot from drawing while satisfying the library.
+func transparentIcon() []byte {
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1, 1)))
+	return buf.Bytes()
+}
 
 // Menubar refresh cadence. SMC reads are cheap so we poll every 2s; the
 // today's-network query hits sqlite and is comparatively heavy, so it's
@@ -70,10 +83,10 @@ var (
 )
 
 func menubarOnReady() {
-	// Empty icon — rely on the title text. systray expects PNG bytes; passing
-	// nil leaves the icon slot empty so the title is the only visible piece,
-	// which matches the iStat "text-only" look.
-	systray.SetIcon([]byte{})
+	// fyne.io/systray on macOS hands the icon bytes to NSImage; an empty
+	// buffer panics, so we hand it a tiny 1×1 transparent PNG to leave the
+	// icon slot effectively blank and let the title text carry the display.
+	systray.SetIcon(transparentIcon())
 	systray.SetTitle("watchdog…")
 	systray.SetTooltip("macos-watchdog")
 
