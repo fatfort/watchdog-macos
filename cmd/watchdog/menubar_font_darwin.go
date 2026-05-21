@@ -29,9 +29,25 @@ package main
 static void patchMenubarFont(double size, const char *text) {
     @autoreleasepool {
         NSStatusBar *bar = [NSStatusBar systemStatusBar];
-        NSArray *items = [bar valueForKey:@"_items"];
-        if (items.count == 0) return;
-        NSStatusItem *item = items.lastObject;
+        // _items returns NSConcretePointerArray on modern macOS, not NSArray —
+        // calling -lastObject on that class throws NSInvalidArgumentException.
+        // Probe both APIs (NSArray-like and NSPointerArray-like) so we work
+        // across Apple's KVC return-type changes.
+        id items = [bar valueForKey:@"_items"];
+        if (items == nil) return;
+        NSUInteger n = 0;
+        if ([items respondsToSelector:@selector(count)]) {
+            n = (NSUInteger)[items count];
+        }
+        if (n == 0) return;
+        NSStatusItem *item = nil;
+        if ([items respondsToSelector:@selector(objectAtIndex:)]) {
+            item = (NSStatusItem *)[items objectAtIndex:n - 1];
+        } else if ([items respondsToSelector:@selector(pointerAtIndex:)]) {
+            void *ptr = [items pointerAtIndex:n - 1];
+            item = (__bridge NSStatusItem *)ptr;
+        }
+        if (item == nil) return;
         NSStatusBarButton *button = item.button;
         if (button == nil) return;
 
